@@ -1,0 +1,422 @@
+import { currentUser } from "@clerk/nextjs/server";
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getOpenAIClient, OPENAI_MODEL } from "@/lib/openai";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function stripHtml(html: string) {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanText(value: string) {
+  return value
+    .replace(/\r/g, "")
+    .replace(/\bhttps?:\/\/\S{60,}/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function getEmailBody(message: {
+  snippet?: string | null;
+  bodyText?: string | null;
+  bodyHtml?: string | null;
+}) {
+  return cleanText(
+    message.bodyText?.trim() ||
+      message.snippet?.trim() ||
+      stripHtml(message.bodyHtml || "") ||
+      "No readable body available."
+  );
+}
+
+function formatDateTime(value?: Date | string | null) {
+  if (!value) return "Unknown time";
+
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatTime(value?: Date | string | null) {
+  if (!value) return "Unknown time";
+
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function isAutomatedSender(email: string) {
+  const value = email.toLowerCase();
+
+  return (
+    value.includes("noreply") ||
+    value.includes("no-reply") ||
+    value.includes("notification") ||
+    value.includes("notifications") ||
+    value.includes("mailer") ||
+    value.includes("updates") ||
+    value.includes("linkedin")
+  );
+}
+
+function inferPriority(text: string) {
+  const value = text.toLowerCase();
+
+  if (
+    /urgent|asap|immediately|critical|deadline|today|important|approve|blocked|priority/.test(
+      value
+    )
+  ) {
+    return "HIGH";
+  }
+
+  if (
+    /please|review|reply|confirm|meeting|schedule|follow up|update|response|share/.test(
+      value
+    )
+  ) {
+    return "MEDIUM";
+  }
+
+  return "LOW";
+}
+
+function looksLikeReplyNeeded(text: string, fromEmail: string) {
+  if (isAutomatedSender(fromEmail)) return false;
+
+  return /please|can you|could you|let me know|reply|confirm|available|response|interested|call|meeting|connect|share|send|review/.test(
+    text.toLowerCase()
+  );
+}
+
+function extractPossibleSender(command: string) {
+  const text = command.trim();
+
+  const patterns = [
+    /sent by ([a-zA-Z0-9._%+\-\s]+)$/i,
+    /from ([a-zA-Z0-9._%+\-\s]+)$/i,
+    /by ([a-zA-Z0-9._%+\-\s]+)$/i,
+    /email of ([a-zA-Z0-9._%+\-\s]+)$/i,
+    /mail of ([a-zA-Z0-9._%+\-\s]+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      return match[1].trim().toLowerCase();
+    }
+  }
+
+  return "";
+}
+
+function isTodayCommand(command: string) {
+  const value = command.toLowerCase();
+
+  return (
+    value.includes("today") ||
+    value.includes("todays") ||
+    value.includes("today's")
+  );
+}
+
+async function getAppUser() {
+  const clerkUser = await currentUser();
+
+  if (!clerkUser) {
+    throw new Error("Unauthorized");
+  }
+
+  const appUser = await prisma.user.findUnique({
+    where: {
+      clerkId: clerkUser.id,
+    },
+  });
+
+  if (!appUser) {
+    throw new Error("User not synced in database.");
+  }
+
+  return { clerkUser, appUser };
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { appUser } = await getAppUser();
+
+    const body = await request.json();
+    const command =
+      typeof body.command === "string" ? body.command.trim() : "";
+
+    if (!command) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Question is required.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const now = new Date();
+
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
+    const possibleSender = extractPossibleSender(command);
+
+    const emails = await prisma.emailMessage.findMany({
+      where: {
+        userId: appUser.id,
+        direction: "INBOUND",
+      },
+      orderBy: {
+        receivedAt: "desc",
+      },
+      take: 60,
+      include: {
+        thread: true,
+      },
+    });
+
+    const relevantEmails = possibleSender
+      ? emails.filter((email) => {
+          const senderText = `${email.fromName || ""} ${
+            email.fromEmail || ""
+          }`.toLowerCase();
+
+          return senderText.includes(possibleSender);
+        })
+      : emails;
+
+    const todayEvents = await prisma.calendarEvent.findMany({
+      where: {
+        userId: appUser.id,
+        startTime: {
+          gte: todayStart,
+          lt: tomorrowStart,
+        },
+      },
+      orderBy: {
+        startTime: "asc",
+      },
+      take: 20,
+    });
+
+    const upcomingEvents = await prisma.calendarEvent.findMany({
+      where: {
+        userId: appUser.id,
+        startTime: {
+          gte: now,
+        },
+      },
+      orderBy: {
+        startTime: "asc",
+      },
+      take: 20,
+    });
+
+    const recentEvents = await prisma.calendarEvent.findMany({
+      where: {
+        userId: appUser.id,
+      },
+      orderBy: {
+        startTime: "desc",
+      },
+      take: 20,
+    });
+
+    const workflows = await prisma.workflow.findMany({
+      where: {
+        userId: appUser.id,
+      },
+      orderBy: {
+        updatedAt: "desc",
+      },
+      take: 20,
+    });
+
+    const audits = await prisma.auditLog.findMany({
+      where: {
+        userId: appUser.id,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: 20,
+    });
+
+    const emailContext = relevantEmails.slice(0, 12).map((email, index) => {
+      const body = getEmailBody(email);
+      const fullText = `${email.subject} ${body}`;
+      const priority = inferPriority(fullText);
+      const replyNeeded = looksLikeReplyNeeded(fullText, email.fromEmail);
+
+      return {
+        index: index + 1,
+        id: email.id,
+        subject: email.subject || "(No subject)",
+        from: `${email.fromName || "Unknown"} <${email.fromEmail}>`,
+        receivedAt: formatDateTime(email.receivedAt),
+        priority,
+        replyNeeded,
+        preview: body.slice(0, 1200),
+      };
+    });
+
+    const calendarContext = {
+      today: todayEvents.map((event) => ({
+        title: event.title,
+        start: formatTime(event.startTime),
+        end: formatTime(event.endTime),
+        fullTime: formatDateTime(event.startTime),
+        location: event.location || "",
+        description: event.description || "",
+        status: event.status || "",
+        source: event.source || "",
+      })),
+      upcoming: upcomingEvents.slice(0, 10).map((event) => ({
+        title: event.title,
+        start: formatDateTime(event.startTime),
+        end: formatDateTime(event.endTime),
+        location: event.location || "",
+        description: event.description || "",
+        status: event.status || "",
+        source: event.source || "",
+      })),
+      recent: recentEvents.slice(0, 10).map((event) => ({
+        title: event.title,
+        start: formatDateTime(event.startTime),
+        end: formatDateTime(event.endTime),
+        location: event.location || "",
+        description: event.description || "",
+        status: event.status || "",
+        source: event.source || "",
+      })),
+    };
+
+    const workflowContext = workflows.slice(0, 10).map((workflow) => ({
+      title: workflow.title,
+      type: workflow.type,
+      status: workflow.status,
+      summary: workflow.summary || "",
+      nextStep: workflow.nextStep || "",
+      updatedAt: formatDateTime(workflow.updatedAt),
+    }));
+
+    const auditContext = audits.slice(0, 10).map((audit) => ({
+      event: audit.event,
+      entityType: audit.entityType || "",
+      entityId: audit.entityId || "",
+      createdAt: formatDateTime(audit.createdAt),
+    }));
+
+    const openai = getOpenAIClient();
+
+    const response = await openai.responses.create({
+      model: OPENAI_MODEL,
+      input: [
+        {
+          role: "system",
+          content: `
+You are pulse AI, a helpful workflow assistant inside the user's app.
+
+You answer using only the provided app context:
+- Gmail email context
+- Google Calendar event context
+- Workflow context
+- Audit log context
+
+Important behavior:
+- Be concise but useful.
+- If the user asks for meetings today, answer from today's calendar events.
+- If the user asks to summarize Gmail/email from a person, use matching email context.
+- If the user asks to generate a reply, draft a reply but do not say it was sent.
+- If the user asks to create a meeting, explain the meeting suggestion and say it needs user approval in Inbox/Calendar.
+- If data is not available, say clearly that it is not available in synced data.
+- Never pretend an email was sent.
+- Never pretend a meeting was created.
+- Use friendly, simple language.
+- Use bullets when it improves readability.
+- The product name is "pulse AI".
+          `.trim(),
+        },
+        {
+          role: "user",
+          content: `
+User question:
+${command}
+
+Possible sender filter extracted from question:
+${possibleSender || "none"}
+
+Email context:
+${JSON.stringify(emailContext, null, 2)}
+
+Calendar context:
+${JSON.stringify(calendarContext, null, 2)}
+
+Workflow context:
+${JSON.stringify(workflowContext, null, 2)}
+
+Audit context:
+${JSON.stringify(auditContext, null, 2)}
+
+Today command:
+${isTodayCommand(command) ? "yes" : "no"}
+
+Answer the user directly.
+          `.trim(),
+        },
+      ],
+    });
+
+    const answer =
+      response.output_text?.trim() ||
+      "I could not generate an answer from the synced workspace data.";
+
+    return NextResponse.json({
+      success: true,
+      answer,
+      meta: {
+        matchedEmails: relevantEmails.length,
+        totalEmails: emails.length,
+        todayEvents: todayEvents.length,
+        upcomingEvents: upcomingEvents.length,
+        workflows: workflows.length,
+        audits: audits.length,
+      },
+    });
+  } catch (error) {
+    console.error("PULSE_AI_COMMAND_ERROR:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown pulse AI command error.",
+      },
+      {
+        status:
+          error instanceof Error && error.message === "Unauthorized" ? 401 : 500,
+      }
+    );
+  }
+}

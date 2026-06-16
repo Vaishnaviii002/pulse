@@ -1,0 +1,306 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String  @id @default(cuid())
+  clerkId       String  @unique
+  email         String  @unique
+  name          String?
+  imageUrl      String?
+  workspaceName String  @default("Personal Workspace")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  connectedAccounts ConnectedAccount[]
+  emailThreads      EmailThread[]
+  emailMessages     EmailMessage[]
+  calendarEvents    CalendarEvent[]
+  workflows         Workflow[]
+  approvals         Approval[]
+  auditLogs         AuditLog[]
+}
+
+model ConnectedAccount {
+  id                String   @id @default(cuid())
+  userId            String
+  provider          String
+  status            String   @default("CONNECTED")
+  accountEmail      String?
+  externalAccountId String?
+  scopes            String[]
+  metadata          Json?
+
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model EmailThread {
+  id               String    @id @default(cuid())
+  userId           String
+  externalThreadId String
+  subject          String
+  participants     String[]
+  lastMessageAt    DateTime?
+  isResolved       Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  EmailMessage[]
+  workflows Workflow[]
+
+  @@unique([userId, externalThreadId])
+  @@index([userId])
+  @@index([lastMessageAt])
+}
+
+model EmailMessage {
+  id                String   @id @default(cuid())
+  userId            String
+  threadId          String
+  externalMessageId String
+  direction         String
+  fromEmail         String
+  fromName          String?
+  toEmails          String[]
+  ccEmails          String[]
+  subject           String
+  snippet           String?
+  bodyText          String?
+  bodyHtml          String?
+
+  priority String?
+  intent   String?
+
+  receivedAt DateTime?
+  sentAt     DateTime?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  thread    EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  workflows Workflow[]
+
+  @@unique([userId, externalMessageId])
+  @@index([userId])
+  @@index([threadId])
+  @@index([priority])
+  @@index([intent])
+}
+
+model CalendarEvent {
+  id              String  @id @default(cuid())
+  userId          String
+  externalEventId String?
+  title           String
+  description     String?
+  location        String?
+  meetingUrl      String?
+  attendees       Json?
+
+  startTime DateTime
+  endTime   DateTime
+
+  status        String?
+  source        String?
+  sourceEmailId String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workflows Workflow[]
+
+  @@unique([userId, externalEventId])
+  @@index([userId])
+  @@index([startTime])
+  @@index([endTime])
+}
+
+model Workflow {
+  id     String @id @default(cuid())
+  userId String
+
+  type   String
+  status String @default("DETECTED")
+
+  title        String
+  summary      String?
+  nextStep     String?
+  contactName  String?
+  contactEmail String?
+  companyName  String?
+
+  emailThreadId   String?
+  emailMessageId  String?
+  calendarEventId String?
+
+  dueAt       DateTime?
+  completedAt DateTime?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailThread   EmailThread?   @relation(fields: [emailThreadId], references: [id], onDelete: SetNull)
+  emailMessage  EmailMessage?  @relation(fields: [emailMessageId], references: [id], onDelete: SetNull)
+  calendarEvent CalendarEvent? @relation(fields: [calendarEventId], references: [id], onDelete: SetNull)
+
+  actions   WorkflowAction[]
+  approvals Approval[]
+  auditLogs AuditLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([type])
+  @@index([dueAt])
+}
+
+model WorkflowAction {
+  id         String @id @default(cuid())
+  workflowId String
+
+  type   String
+  status String @default("SUGGESTED")
+
+  title       String
+  description String?
+  payload     Json?
+  result      Json?
+
+  preparedAt DateTime?
+  approvedAt DateTime?
+  executedAt DateTime?
+  failedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workflow  Workflow   @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  approvals Approval[]
+  auditLogs AuditLog[]
+
+  @@index([workflowId])
+  @@index([status])
+  @@index([type])
+}
+
+model Approval {
+  id         String  @id @default(cuid())
+  userId     String
+  workflowId String
+  actionId   String?
+
+  status String  @default("PENDING")
+  note   String?
+
+  decidedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workflow Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  action   WorkflowAction? @relation(fields: [actionId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([workflowId])
+  @@index([status])
+}
+
+model AuditLog {
+  id     String @id @default(cuid())
+  userId String
+
+  workflowId String?
+  actionId   String?
+
+  event       String
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workflow Workflow?       @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  action   WorkflowAction? @relation(fields: [actionId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([workflowId])
+  @@index([createdAt])
+}
+
+model CorsairIntegration {
+  id        String           @id
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  name      String
+  config    Json             @default("{}")
+  dek       String?
+  accounts  CorsairAccount[]
+
+  @@map("corsair_integrations")
+}
+
+model CorsairAccount {
+  id            String             @id
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+  tenantId      String             @map("tenant_id")
+  integrationId String             @map("integration_id")
+  config        Json               @default("{}")
+  dek           String?
+  integration   CorsairIntegration @relation(fields: [integrationId], references: [id])
+  entities      CorsairEntity[]
+  events        CorsairEvent[]
+
+  @@map("corsair_accounts")
+}
+
+model CorsairEntity {
+  id         String         @id
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  accountId  String         @map("account_id")
+  entityId   String         @map("entity_id")
+  entityType String         @map("entity_type")
+  version    String
+  data       Json           @default("{}")
+  account    CorsairAccount @relation(fields: [accountId], references: [id])
+
+  @@map("corsair_entities")
+}
+
+model CorsairEvent {
+  id        String         @id
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  accountId String         @map("account_id")
+  eventType String         @map("event_type")
+  payload   Json           @default("{}")
+  status    String?
+  account   CorsairAccount @relation(fields: [accountId], references: [id])
+
+  @@map("corsair_events")
+}
