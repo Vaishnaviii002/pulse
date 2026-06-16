@@ -33,7 +33,7 @@ function getEmailBody(message: {
     message.bodyText?.trim() ||
       message.snippet?.trim() ||
       stripHtml(message.bodyHtml || "") ||
-      "No readable body available."
+      "No readable body available.",
   );
 }
 
@@ -76,7 +76,7 @@ function inferPriority(text: string) {
 
   if (
     /urgent|asap|immediately|critical|deadline|today|important|approve|blocked|priority/.test(
-      value
+      value,
     )
   ) {
     return "HIGH";
@@ -84,7 +84,7 @@ function inferPriority(text: string) {
 
   if (
     /please|review|reply|confirm|meeting|schedule|follow up|update|response|share/.test(
-      value
+      value,
     )
   ) {
     return "MEDIUM";
@@ -97,7 +97,7 @@ function looksLikeReplyNeeded(text: string, fromEmail: string) {
   if (isAutomatedSender(fromEmail)) return false;
 
   return /please|can you|could you|let me know|reply|confirm|available|response|interested|call|meeting|connect|share|send|review/.test(
-    text.toLowerCase()
+    text.toLowerCase(),
   );
 }
 
@@ -120,6 +120,118 @@ function extractPossibleSender(command: string) {
   }
 
   return "";
+}
+
+function normalizeSearchValue(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9@.\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSearchTerms(command: string, possibleSender: string) {
+  const stopWords = new Set([
+    "can",
+    "you",
+    "send",
+    "me",
+    "the",
+    "emails",
+    "email",
+    "gmail",
+    "mail",
+    "sent",
+    "send",
+    "by",
+    "from",
+    "of",
+    "to",
+    "summarize",
+    "summary",
+    "please",
+    "will",
+    "would",
+  ]);
+
+  const source = possibleSender || command;
+
+  return normalizeSearchValue(source)
+    .split(" ")
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 3)
+    .filter((word) => !stopWords.has(word));
+}
+
+function emailSearchText(email: {
+  subject: string;
+  snippet: string | null;
+  bodyText: string | null;
+  bodyHtml: string | null;
+  fromName: string | null;
+  fromEmail: string;
+  toEmails: string[];
+  ccEmails: string[];
+  thread?: {
+    subject?: string | null;
+  } | null;
+}) {
+  return normalizeSearchValue(
+    [
+      email.fromName || "",
+      email.fromEmail || "",
+      email.toEmails.join(" "),
+      email.ccEmails.join(" "),
+      email.subject || "",
+      email.thread?.subject || "",
+      email.snippet || "",
+      email.bodyText || "",
+      stripHtml(email.bodyHtml || ""),
+    ].join(" "),
+  );
+}
+
+function findRelevantEmails({
+  emails,
+  command,
+  possibleSender,
+}: {
+  emails: Array<{
+    subject: string;
+    snippet: string | null;
+    bodyText: string | null;
+    bodyHtml: string | null;
+    fromName: string | null;
+    fromEmail: string;
+    toEmails: string[];
+    ccEmails: string[];
+    thread?: {
+      subject?: string | null;
+    } | null;
+  }>;
+  command: string;
+  possibleSender: string;
+}) {
+  const terms = getSearchTerms(command, possibleSender);
+
+  if (!terms.length) return emails;
+
+  return emails
+    .map((email) => {
+      const text = emailSearchText(email);
+
+      const score = terms.reduce((total, term) => {
+        return text.includes(term) ? total + 1 : total;
+      }, 0);
+
+      return {
+        email,
+        score,
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.email);
 }
 
 function isTodayCommand(command: string) {
@@ -157,8 +269,7 @@ export async function POST(request: NextRequest) {
     const { appUser } = await getAppUser();
 
     const body = await request.json();
-    const command =
-      typeof body.command === "string" ? body.command.trim() : "";
+    const command = typeof body.command === "string" ? body.command.trim() : "";
 
     if (!command) {
       return NextResponse.json(
@@ -166,7 +277,7 @@ export async function POST(request: NextRequest) {
           success: false,
           error: "Question is required.",
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -183,26 +294,28 @@ export async function POST(request: NextRequest) {
     const emails = await prisma.emailMessage.findMany({
       where: {
         userId: appUser.id,
-        direction: "INBOUND",
       },
-      orderBy: {
-        receivedAt: "desc",
-      },
-      take: 60,
+      orderBy: [
+        {
+          receivedAt: "desc",
+        },
+        {
+          sentAt: "desc",
+        },
+      ],
+      take: 200,
       include: {
         thread: true,
       },
     });
 
-    const relevantEmails = possibleSender
-      ? emails.filter((email) => {
-          const senderText = `${email.fromName || ""} ${
-            email.fromEmail || ""
-          }`.toLowerCase();
+    const matchedEmails = findRelevantEmails({
+      emails,
+      command,
+      possibleSender,
+    });
 
-          return senderText.includes(possibleSender);
-        })
-      : emails;
+    const relevantEmails = matchedEmails.length ? matchedEmails : emails;
 
     const todayEvents = await prisma.calendarEvent.findMany({
       where: {
@@ -415,8 +528,10 @@ Answer the user directly.
       },
       {
         status:
-          error instanceof Error && error.message === "Unauthorized" ? 401 : 500,
-      }
+          error instanceof Error && error.message === "Unauthorized"
+            ? 401
+            : 500,
+      },
     );
   }
 }
