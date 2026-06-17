@@ -1,7 +1,7 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { syncLatestCalendarForUser } from "@/lib/calendar-sync";
+import { extractTasksFromRecentEmails } from "@/lib/task-extraction";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,20 +36,18 @@ export async function POST() {
       );
     }
 
-    const result = await syncLatestCalendarForUser({
-      clerkUserId: clerkUser.id,
+    const result = await extractTasksFromRecentEmails({
       appUserId: appUser.id,
-      daysBack: 30,
-      daysForward: 180,
+      limit: 40,
     });
 
     return NextResponse.json({
       success: true,
-      message: "Calendar synced successfully.",
+      message: "Email task extraction completed.",
       ...result,
     });
   } catch (error) {
-    console.error("CALENDAR_SYNC_ROUTE_ERROR:", error);
+    console.error("TASK_EXTRACTION_ERROR:", error);
 
     return NextResponse.json(
       {
@@ -57,7 +55,7 @@ export async function POST() {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to sync Google Calendar.",
+            : "Failed to extract tasks from emails.",
       },
       { status: 500 }
     );

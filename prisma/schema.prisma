@@ -15,6 +15,7 @@ model User {
   name          String?
   imageUrl      String?
   workspaceName String  @default("Personal Workspace")
+  
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -26,6 +27,7 @@ model User {
   workflows         Workflow[]
   approvals         Approval[]
   auditLogs         AuditLog[]
+  tasks Task[]
 }
 
 model ConnectedAccount {
@@ -303,4 +305,90 @@ model CorsairEvent {
   account   CorsairAccount @relation(fields: [accountId], references: [id])
 
   @@map("corsair_events")
+}
+
+model Task {
+  id                 String    @id @default(cuid())
+
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title              String
+  description        String?
+  type               String    @default("GENERAL") // GENERAL, EMAIL, FORM, ASSESSMENT, INTERVIEW, MEETING, FOLLOW_UP, PLACEMENT
+  priority           String    @default("MEDIUM") // HIGH, MEDIUM, LOW
+  status             String    @default("OPEN") // OPEN, IN_PROGRESS, DONE, DISMISSED
+
+  dueAt              DateTime?
+  source             String    @default("MANUAL") // MANUAL, EMAIL, CALENDAR, PULSE_AI
+
+  sourceEmailId      String?
+  sourceEmailSubject String?
+  sourceEmailFrom    String?
+
+  metadata           Json?
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([dueAt])
+  @@index([sourceEmailId])
+}
+
+model UserSettings {
+  id        String   @id @default(cuid())
+
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Sync preferences
+  autoSyncOnOpen              Boolean @default(true)
+  syncOnTabFocus              Boolean @default(true)
+  syncEveryMinute             Boolean @default(true)
+  analyzeGmailAfterSync       Boolean @default(true)
+  extractTasksAutomatically   Boolean @default(true)
+
+  // pulse AI preferences
+  defaultReplyTone            String  @default("PROFESSIONAL")
+  defaultSummaryStyle         String  @default("ACTION_FOCUSED")
+
+  allowEmailSummaries         Boolean @default(true)
+  allowReplyDrafts            Boolean @default(true)
+  allowTaskExtraction         Boolean @default(true)
+  allowMeetingNotes           Boolean @default(true)
+  allowCalendarSuggestions    Boolean @default(true)
+
+  // Approvals and safety
+  requireEmailApproval        Boolean @default(true)
+  requireCalendarApproval     Boolean @default(true)
+  requireExternalConfirmation Boolean @default(true)
+
+  // Task rules
+  detectPlacementForms        Boolean @default(true)
+  detectAssessments           Boolean @default(true)
+  detectCodingRounds          Boolean @default(true)
+  detectAssignments           Boolean @default(true)
+  detectInterviews            Boolean @default(true)
+  detectMeetingRequests       Boolean @default(true)
+  detectFollowUps             Boolean @default(true)
+  detectDocumentSubmissions   Boolean @default(true)
+
+  ignoreOtpEmails             Boolean @default(true)
+  ignoreNewsletters           Boolean @default(true)
+  ignorePromotions            Boolean @default(true)
+  ignoreSocialNotifications   Boolean @default(true)
+
+  // Calendar preferences
+  defaultMeetingDuration      Int     @default(30)
+  workingHoursStart           String  @default("09:00")
+  workingHoursEnd             String  @default("18:00")
+  defaultReminderMinutes      Int     @default(10)
+  addMeetLinkByDefault        Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }

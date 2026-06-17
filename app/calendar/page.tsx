@@ -1,133 +1,225 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  AlertCircle,
-  CalendarDays,
-  CheckCircle2,
+  Bot,
+  CalendarClock,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
   Clock,
-  ExternalLink,
   Loader2,
-  MapPin,
+  PanelRightClose,
+  PanelRightOpen,
   RefreshCw,
-  Users,
-  Video,
+  Search,
+  Send,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { PulseMark } from "@/components/ui/pulse-logo";
 
-type CalendarEvent = {
+type CalendarMeeting = {
   id: string;
-  externalEventId: string | null;
   title: string;
-  description: string | null;
-  location: string | null;
-  meetingUrl: string | null;
-  attendees: unknown;
+  description: string;
+  location: string;
   startTime: string;
   endTime: string;
-  status: string | null;
-  source: string | null;
+  status: string;
+  source: string;
+  meetingUrl: string;
+  attendees: string[];
   sourceEmailId: string | null;
-  metadata: unknown;
-  createdAt: string;
-  updatedAt: string;
+  sourceEmail: {
+    id: string;
+    subject: string;
+    fromName: string;
+    fromEmail: string;
+    snippet: string;
+    bodyText: string;
+    receivedAt: string | null;
+    threadSubject: string;
+  } | null;
+  readiness: {
+    score: number;
+    label: "Ready" | "Needs preparation" | "Not ready";
+    missing: string[];
+  };
 };
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en-IN", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-  }).format(new Date(value));
+type FilterKey = "ALL" | "TODAY" | "FROM_EMAIL" | "WITH_LINK" | "NEEDS_PREP";
+
+type AiTrigger = {
+  id: number;
+  command: string;
+};
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: "ALL", label: "All" },
+  { key: "TODAY", label: "Today" },
+];
+
+const WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const HOURS = Array.from({ length: 11 }, (_, index) => index + 8);
+const START_HOUR = 8;
+const END_HOUR = 19;
+const HOUR_HEIGHT = 76;
+
+function startOfWeek(date: Date) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() - copy.getDay());
+  copy.setHours(0, 0, 0, 0);
+  return copy;
 }
 
-function formatTime(value: string) {
+function addDays(date: Date, days: number) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+function isSameDay(a: Date, b: Date) {
+  return a.toDateString() === b.toDateString();
+}
+
+function isTodayDate(date: Date) {
+  return isSameDay(date, new Date());
+}
+
+function formatWeekRange(start: Date) {
+  const end = addDays(start, 6);
+
+  const startText = new Intl.DateTimeFormat("en-IN", {
+    month: "short",
+    day: "numeric",
+  }).format(start);
+
+  const endText = new Intl.DateTimeFormat("en-IN", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(end);
+
+  return `${startText} – ${endText}`;
+}
+
+function toMonthInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+
+  return `${year}-${month}`;
+}
+
+function getWeekStartFromMonthValue(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  return startOfWeek(new Date(year, month - 1, 1));
+}
+
+function formatTime(value?: string | null) {
+  if (!value) return "";
+
   return new Intl.DateTimeFormat("en-IN", {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
 }
 
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat("en-IN", {
-    day: "numeric",
-    month: "short",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function getAttendees(value: unknown): { email?: string; displayName?: string }[] {
-  if (!Array.isArray(value)) return [];
-
-  return value.filter(
-    (item): item is { email?: string; displayName?: string } =>
-      typeof item === "object" && item !== null
-  );
-}
-
-function getDuration(start: string, end: string) {
-  const diff = new Date(end).getTime() - new Date(start).getTime();
-  const minutes = Math.max(0, Math.round(diff / 60000));
-
-  if (minutes >= 60) {
-    const hours = Math.floor(minutes / 60);
-    const remaining = minutes % 60;
-
-    return remaining ? `${hours}h ${remaining}m` : `${hours}h`;
+function getMeetingCardClass(meeting: CalendarMeeting) {
+  if (meeting.sourceEmailId) {
+    return "border-emerald-300 bg-emerald-50 text-emerald-950 hover:bg-emerald-100";
   }
 
-  return `${minutes}m`;
+  if (meeting.readiness.label !== "Ready") {
+    return "border-amber-300 bg-amber-50 text-amber-950 hover:bg-amber-100";
+  }
+
+  if (meeting.meetingUrl) {
+    return "border-blue-300 bg-blue-50 text-blue-950 hover:bg-blue-100";
+  }
+
+  return "border-slate-300 bg-slate-50 text-slate-900 hover:bg-slate-100";
 }
 
-function isToday(value: string) {
-  return new Date(value).toDateString() === new Date().toDateString();
+function getMeetingPosition(meeting: CalendarMeeting) {
+  const start = new Date(meeting.startTime);
+  const end = new Date(meeting.endTime);
+
+  const startMinutes = start.getHours() * 60 + start.getMinutes();
+  const endMinutes = end.getHours() * 60 + end.getMinutes();
+
+  const gridStartMinutes = START_HOUR * 60;
+  const gridEndMinutes = END_HOUR * 60;
+
+  const clampedStart = Math.max(startMinutes, gridStartMinutes);
+  const clampedEnd = Math.min(endMinutes, gridEndMinutes);
+
+  const top = ((clampedStart - gridStartMinutes) / 60) * HOUR_HEIGHT;
+  const height = Math.max(42, ((clampedEnd - clampedStart) / 60) * HOUR_HEIGHT);
+
+  return {
+    top,
+    height,
+  };
+}
+
+async function readJson(response: Response) {
+  const text = await response.text();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      success: false,
+      error:
+        "Server returned invalid JSON. Please sign in again or restart the app.",
+    };
+  }
 }
 
 export default function CalendarPage() {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const router = useRouter();
+
+  const [meetings, setMeetings] = useState<CalendarMeeting[]>([]);
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeFilter, setActiveFilter] = useState<FilterKey>("ALL");
+
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  const selectedEvent = useMemo(
-    () => events.find((event) => event.id === selectedEventId) || null,
-    [events, selectedEventId]
-  );
+  const [isAiOpen, setIsAiOpen] = useState(false);
+  const [aiTrigger, setAiTrigger] = useState<AiTrigger | null>(null);
 
-  const loadEvents = useCallback(async () => {
+  const weekDays = useMemo(() => {
+    return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+  }, [weekStart]);
+
+  const loadMeetings = useCallback(async () => {
     try {
       setIsLoading(true);
       setPageError(null);
 
-      const response = await fetch("/api/calendar/events", {
+      const response = await fetch("/api/meetings", {
         method: "GET",
         cache: "no-store",
       });
 
-      const data = await response.json();
+      const data = await readJson(response);
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to load Calendar events.");
+        throw new Error(data.error || "Failed to load calendar meetings.");
       }
 
-      const nextEvents = (data.events || []) as CalendarEvent[];
-      setEvents(nextEvents);
-
-      setSelectedEventId((current) => {
-        if (current && nextEvents.some((event) => event.id === current)) {
-          return current;
-        }
-
-        return nextEvents[0]?.id || null;
-      });
+      setMeetings(data.meetings || []);
     } catch (error) {
       setPageError(
-        error instanceof Error ? error.message : "Failed to load Calendar."
+        error instanceof Error ? error.message : "Failed to load calendar.",
       );
     } finally {
       setIsLoading(false);
@@ -135,44 +227,151 @@ export default function CalendarPage() {
   }, []);
 
   useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
+    loadMeetings();
+  }, [loadMeetings]);
+
+  useEffect(() => {
+  function handleAutoSyncComplete() {
+    void loadMeetings();
+  }
+
+  window.addEventListener("pulse:auto-sync-complete", handleAutoSyncComplete);
+
+  return () => {
+    window.removeEventListener(
+      "pulse:auto-sync-complete",
+      handleAutoSyncComplete
+    );
+  };
+}, [loadMeetings]);
+
+  useEffect(() => {
+  const intervalId = window.setInterval(() => {
+    void loadMeetings();
+  }, 30000);
+
+  function handleFocus() {
+    void loadMeetings();
+  }
+
+  window.addEventListener("focus", handleFocus);
+
+  return () => {
+    window.clearInterval(intervalId);
+    window.removeEventListener("focus", handleFocus);
+  };
+}, [loadMeetings]);
+
+  const filteredMeetings = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    
+
+    return meetings.filter((meeting) => {
+      const matchesSearch =
+        !q ||
+        meeting.title.toLowerCase().includes(q) ||
+        meeting.description.toLowerCase().includes(q) ||
+        meeting.attendees.join(" ").toLowerCase().includes(q) ||
+        meeting.sourceEmail?.subject.toLowerCase().includes(q) ||
+        meeting.sourceEmail?.fromEmail.toLowerCase().includes(q);
+
+      if (!matchesSearch) return false;
+
+      if (activeFilter === "TODAY") {
+        return isSameDay(new Date(meeting.startTime), new Date());
+      }
+
+      if (activeFilter === "FROM_EMAIL") {
+        return Boolean(meeting.sourceEmailId);
+      }
+
+      if (activeFilter === "WITH_LINK") {
+        return Boolean(meeting.meetingUrl);
+      }
+
+      if (activeFilter === "NEEDS_PREP") {
+        return meeting.readiness.label !== "Ready";
+      }
+
+      return true;
+    });
+  }, [meetings, searchQuery, activeFilter]);
+
+  const weekMeetings = useMemo(() => {
+    const weekEnd = addDays(weekStart, 7);
+
+    return filteredMeetings.filter((meeting) => {
+      const start = new Date(meeting.startTime);
+      return start >= weekStart && start < weekEnd;
+    });
+  }, [filteredMeetings, weekStart]);
+
+  const meetingsByDay = useMemo(() => {
+    return weekDays.map((day) =>
+      weekMeetings
+        .filter((meeting) => isSameDay(new Date(meeting.startTime), day))
+        .sort(
+          (a, b) =>
+            new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
+        ),
+    );
+  }, [weekDays, weekMeetings]);
+
+  function handleFilterChange(filter: FilterKey) {
+  setActiveFilter(filter);
+
+  if (filter === "TODAY") {
+    setWeekStart(startOfWeek(new Date()));
+  }
+}
 
   async function handleSyncCalendar() {
     try {
       setIsSyncing(true);
       setPageError(null);
-      setSyncMessage(null);
 
       const response = await fetch("/api/calendar/sync", {
         method: "POST",
       });
 
-      const data = await response.json();
+      const data = await readJson(response);
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to sync Calendar.");
+        throw new Error(data.error || "Failed to sync Google Calendar.");
       }
 
-      setSyncMessage(`Calendar synced. ${data.saved} events saved.`);
-      await loadEvents();
+      await loadMeetings();
     } catch (error) {
       setPageError(
-        error instanceof Error ? error.message : "Failed to sync Calendar."
+        error instanceof Error
+          ? error.message
+          : "Failed to sync Google Calendar.",
       );
     } finally {
       setIsSyncing(false);
     }
   }
 
-  const todayEvents = events.filter((event) => isToday(event.startTime));
-  const upcomingEvents = events.filter((event) => !isToday(event.startTime));
+  function openMeeting(meetingId: string) {
+    router.push(`/meetings?meetingId=${meetingId}`);
+  }
 
   return (
     <AppShell
-      showAiPanel
+      showAiPanel={isAiOpen}
       showSearch={false}
-      rightPanel={<CalendarAssistantPanel events={events} selectedEvent={selectedEvent} />}
+      showHeader={false}
+      rightPanel={
+        isAiOpen ? (
+          <CalendarPulseAiPanel
+            meetings={filteredMeetings}
+            trigger={aiTrigger}
+            onClose={() => setIsAiOpen(false)}
+            onSyncCalendar={handleSyncCalendar}
+          />
+        ) : undefined
+      }
     >
       <div className="flex h-full min-h-0 flex-col gap-5">
         <div className="flex items-start justify-between gap-4">
@@ -181,16 +380,32 @@ export default function CalendarPage() {
               Calendar
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Sync Google Calendar and review upcoming meetings from pulse.
+              View schedules, timing, and meeting history.
             </p>
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsAiOpen((current) => !current)}
+              className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold shadow-sm transition ${
+                isAiOpen
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                  : "border-slate-200 bg-white text-slate-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800"
+              }`}
+            >
+              {isAiOpen ? (
+                <PanelRightClose className="h-4 w-4" />
+              ) : (
+                <PanelRightOpen className="h-4 w-4" />
+              )}
+              pulse AI
+            </button>
+
             <Link
               href="/api/corsair/oauth/calendar/start"
               className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800"
             >
-              <CalendarDays className="h-4 w-4" />
+              <CalendarClock className="h-4 w-4" />
               Connect Calendar
             </Link>
 
@@ -211,383 +426,505 @@ export default function CalendarPage() {
 
         {pageError && (
           <div className="flex items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            <AlertCircle className="h-4 w-4" />
+            <CircleAlert className="h-4 w-4" />
             <span>{pageError}</span>
           </div>
         )}
 
-        {syncMessage && (
-          <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            <CheckCircle2 className="h-4 w-4" />
-            <span>{syncMessage}</span>
-          </div>
-        )}
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-300 bg-white p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                {FILTERS.map((filter) => {
+                  const active = activeFilter === filter.key;
 
-        <div className="grid min-h-0 flex-1 grid-cols-[360px_minmax(0,1fr)] gap-5">
-          <section className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-5 py-4">
-              <h2 className="text-sm font-semibold text-slate-950">
-                Upcoming events
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                {events.length} synced events
-              </p>
-            </div>
+                  return (
+                    <button
+                      key={filter.key}
+                      onClick={() => handleFilterChange(filter.key)}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                        active
+                          ? "bg-emerald-700 text-white"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
+                    >
+                      {filter.label}
+                    </button>
+                  );
+                })}
+              </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              {isLoading ? (
-                <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Loading events...
-                </div>
-              ) : events.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
-                  <CalendarDays className="mb-3 h-8 w-8 text-slate-400" />
-                  <h3 className="text-sm font-semibold text-slate-900">
-                    No calendar events yet
-                  </h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Connect Calendar and sync events to show your schedule.
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setWeekStart(addDays(weekStart, -7))}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+
+                <input
+                  type="month"
+                  value={toMonthInputValue(weekStart)}
+                  onChange={(event) => {
+                    setWeekStart(
+                      getWeekStartFromMonthValue(event.target.value),
+                    );
+                  }}
+                  className="h-10 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-emerald-300"
+                />
+
+                <div className="min-w-[210px] text-center">
+                  <p className="text-sm font-semibold text-slate-950">
+                    {formatWeekRange(weekStart)}
                   </p>
                 </div>
-              ) : (
-                <div className="space-y-5">
-                  {todayEvents.length > 0 && (
-                    <EventGroup
-                      title="Today"
-                      events={todayEvents}
-                      selectedEventId={selectedEventId}
-                      onSelect={setSelectedEventId}
-                    />
-                  )}
 
-                  {upcomingEvents.length > 0 && (
-                    <EventGroup
-                      title="Upcoming"
-                      events={upcomingEvents}
-                      selectedEventId={selectedEventId}
-                      onSelect={setSelectedEventId}
-                    />
-                  )}
-                </div>
-              )}
+                <button
+                  onClick={() => setWeekStart(addDays(weekStart, 7))}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-          </section>
+          </div>
 
-          <section className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            {!selectedEvent ? (
-              <div className="flex h-full flex-col items-center justify-center p-8 text-center">
-                <CalendarDays className="mb-4 h-10 w-10 text-slate-300" />
-                <h3 className="text-lg font-semibold text-slate-950">
-                  Select an event
-                </h3>
-                <p className="mt-1 max-w-md text-sm text-slate-500">
-                  Choose a Calendar event to see meeting details.
-                </p>
+          <div className="min-h-0 flex-1 overflow-auto p-5">
+            {isLoading ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading calendar...
               </div>
             ) : (
-              <>
-                <div className="border-b border-slate-200 px-6 py-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="mb-3 flex flex-wrap gap-2">
-                        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                          {selectedEvent.status || "confirmed"}
-                        </span>
+              <div className="min-w-[900px] overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="grid grid-cols-[72px_repeat(7,minmax(110px,1fr))] border-b border-slate-200 bg-white">
+                  <div className="border-r border-slate-200 px-3 py-3 text-xs text-slate-400" />
 
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
-                          {selectedEvent.source || "GOOGLE_CALENDAR"}
-                        </span>
-                      </div>
-
-                      <h2 className="text-2xl font-semibold tracking-tight text-slate-950">
-                        {selectedEvent.title}
-                      </h2>
-
-                      <p className="mt-2 text-sm text-slate-500">
-                        {formatDateTime(selectedEvent.startTime)} ·{" "}
-                        {getDuration(selectedEvent.startTime, selectedEvent.endTime)}
+                  {weekDays.map((day, index) => (
+                    <div
+                      key={day.toISOString()}
+                      className="border-r border-slate-200 px-3 py-3 text-center"
+                    >
+                      <p className="text-xs font-semibold text-slate-500">
+                        {WEEK_DAYS[index]}
                       </p>
-                    </div>
 
-                    {selectedEvent.meetingUrl && (
-                      <a
-                        href={selectedEvent.meetingUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex h-10 items-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800"
+                      <div
+                        className={`mx-auto mt-1 flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
+                          isTodayDate(day)
+                            ? "bg-emerald-700 text-white"
+                            : "text-slate-700"
+                        }`}
                       >
-                        <Video className="h-4 w-4" />
-                        Join
-                      </a>
-                    )}
-                  </div>
+                        {day.getDate()}
+                      </div>
+                    </div>
+                  ))}
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                  <div className="grid gap-5">
-                    <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5">
-                      <h3 className="text-sm font-semibold text-slate-950">
-                        Event details
-                      </h3>
-
-                      <div className="mt-4 grid gap-3">
-                        <DetailRow
-                          icon={Clock}
-                          label="Time"
-                          value={`${formatTime(selectedEvent.startTime)} - ${formatTime(
-                            selectedEvent.endTime
-                          )}`}
-                        />
-
-                        <DetailRow
-                          icon={CalendarDays}
-                          label="Date"
-                          value={formatDate(selectedEvent.startTime)}
-                        />
-
-                        <DetailRow
-                          icon={MapPin}
-                          label="Location"
-                          value={selectedEvent.location || "No location"}
-                        />
-
-                        <DetailRow
-                          icon={Users}
-                          label="Attendees"
-                          value={`${getAttendees(selectedEvent.attendees).length} people`}
-                        />
+                <div
+                  className="relative grid grid-cols-[72px_repeat(7,minmax(110px,1fr))]"
+                  style={{ height: HOURS.length * HOUR_HEIGHT }}
+                >
+                  <div className="border-r border-slate-200 bg-white">
+                    {HOURS.map((hour) => (
+                      <div
+                        key={hour}
+                        className="border-b border-slate-200 px-3 text-right text-[11px] font-medium text-slate-400"
+                        style={{ height: HOUR_HEIGHT }}
+                      >
+                        {hour > 12 ? `${hour - 12} PM` : `${hour} AM`}
                       </div>
-                    </section>
-
-                    {selectedEvent.description && (
-                      <section className="rounded-2xl border border-slate-200 bg-white p-5">
-                        <h3 className="text-sm font-semibold text-slate-950">
-                          Description
-                        </h3>
-
-                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-600">
-                          {selectedEvent.description}
-                        </p>
-                      </section>
-                    )}
-
-                    <section className="rounded-2xl border border-slate-200 bg-white p-5">
-                      <h3 className="text-sm font-semibold text-slate-950">
-                        Attendees
-                      </h3>
-
-                      <div className="mt-4 space-y-2">
-                        {getAttendees(selectedEvent.attendees).length ? (
-                          getAttendees(selectedEvent.attendees).map((attendee, index) => (
-                            <div
-                              key={`${attendee.email}-${index}`}
-                              className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700"
-                            >
-                              <p className="font-medium text-slate-950">
-                                {attendee.displayName || attendee.email || "Unknown attendee"}
-                              </p>
-                              {attendee.email && (
-                                <p className="mt-1 text-slate-500">{attendee.email}</p>
-                              )}
-                            </div>
-                          ))
-                        ) : (
-                          <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                            No attendees found.
-                          </p>
-                        )}
-                      </div>
-                    </section>
+                    ))}
                   </div>
+
+                  {weekDays.map((day, dayIndex) => (
+                    <div
+                      key={day.toISOString()}
+                      className="relative border-r border-slate-200"
+                    >
+                      {HOURS.map((hour) => (
+                        <div
+                          key={hour}
+                          className="border-b border-slate-200"
+                          style={{ height: HOUR_HEIGHT }}
+                        />
+                      ))}
+
+                      {meetingsByDay[dayIndex].map((meeting, meetingIndex) => {
+                        const position = getMeetingPosition(meeting);
+
+                        return (
+                          <button
+                            key={meeting.id}
+                            onClick={() => openMeeting(meeting.id)}
+                            className={`absolute left-2 right-2 overflow-hidden rounded-xl border px-2 py-1.5 text-left text-[11px] leading-4 shadow-sm transition ${getMeetingCardClass(
+                              meeting,
+                            )}`}
+                            style={{
+                              top: position.top + meetingIndex * 2,
+                              height: position.height,
+                            }}
+                          >
+                            <p className="truncate font-bold">
+                              {formatTime(meeting.startTime)}
+                            </p>
+                            <p className="mt-0.5 line-clamp-2 font-semibold">
+                              {meeting.title || "Untitled meeting"}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
-              </>
+              </div>
             )}
-          </section>
-        </div>
+
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-emerald-700" />
+                <h3 className="text-sm font-semibold text-slate-950">
+                  Synced meeting activity & time insights
+                </h3>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-4">
+                <InsightCard
+                  label="This week"
+                  value={`${weekMeetings.length} meetings`}
+                  detail="All meetings visible in the selected week."
+                />
+                <InsightCard
+                  label="Email-created"
+                  value={`${
+                    weekMeetings.filter((meeting) => meeting.sourceEmailId)
+                      .length
+                  } meetings`}
+                  detail="Meetings created from Gmail workflow."
+                />
+                <InsightCard
+                  label="Needs prep"
+                  value={`${
+                    weekMeetings.filter(
+                      (meeting) => meeting.readiness.label !== "Ready",
+                    ).length
+                  } meetings`}
+                  detail="Meetings missing agenda, attendees, or link."
+                />
+                <InsightCard
+                  label="Meet links"
+                  value={`${
+                    weekMeetings.filter((meeting) => meeting.meetingUrl).length
+                  } meetings`}
+                  detail="Meetings with online meeting URLs."
+                />
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </AppShell>
   );
 }
 
-function EventGroup({
-  title,
-  events,
-  selectedEventId,
-  onSelect,
+function CalendarPulseAiPanel({
+  meetings,
+  trigger,
+  onClose,
+  onSyncCalendar,
 }: {
-  title: string;
-  events: CalendarEvent[];
-  selectedEventId: string | null;
-  onSelect: (id: string) => void;
+  meetings: CalendarMeeting[];
+  trigger: AiTrigger | null;
+  onClose: () => void;
+  onSyncCalendar: () => Promise<void>;
 }) {
+  const [input, setInput] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
+  const [messages, setMessages] = useState<
+    { id: string; role: "user" | "assistant"; content: string }[]
+  >([]);
+
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const lastTriggerIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, [messages, isThinking]);
+
+  useEffect(() => {
+    if (!trigger) return;
+    if (lastTriggerIdRef.current === trigger.id) return;
+
+    lastTriggerIdRef.current = trigger.id;
+    submitQuestion(trigger.command);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trigger]);
+
+  function isCalendarSyncCommand(command: string) {
+    return /(sync|refresh|update).*(calendar)|calendar.*(sync|refresh|update)/i.test(
+      command,
+    );
+  }
+
+  function calendarContext() {
+    return meetings
+      .slice(0, 20)
+      .map(
+        (meeting) =>
+          `- ${meeting.title} at ${formatTime(meeting.startTime)}, readiness: ${meeting.readiness.label}`,
+      )
+      .join("\n");
+  }
+
+  async function submitQuestion(question: string) {
+    const cleanQuestion = question.trim();
+
+    if (!cleanQuestion || isThinking) return;
+
+    setInput("");
+    setIsThinking(true);
+
+    setMessages((current) => [
+      ...current,
+      {
+        id: `user-${Date.now()}`,
+        role: "user",
+        content: cleanQuestion,
+      },
+    ]);
+
+    if (isCalendarSyncCommand(cleanQuestion)) {
+      try {
+        await onSyncCalendar();
+
+        setMessages((current) => [
+          ...current,
+          {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            content: "Calendar synced successfully.",
+          },
+        ]);
+      } catch (error) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            content:
+              error instanceof Error
+                ? error.message
+                : "I could not sync Calendar.",
+          },
+        ]);
+      } finally {
+        setIsThinking(false);
+      }
+
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/pulse-ai/command", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          command: `
+Answer in 2-3 short lines only.
+
+${cleanQuestion}
+
+Calendar context:
+${calendarContext()}
+          `.trim(),
+        }),
+      });
+
+      const data = await readJson(response);
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "pulse AI failed to answer.");
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: data.answer || "I could not generate an answer.",
+        },
+      ]);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content:
+            error instanceof Error
+              ? error.message
+              : "pulse AI failed to answer.",
+        },
+      ]);
+    } finally {
+      setIsThinking(false);
+    }
+  }
+
+  function handleSubmit() {
+    submitQuestion(input);
+  }
+
   return (
-    <div>
-      <h3 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-        {title}
-      </h3>
-
-      <div className="space-y-2">
-        {events.map((event) => {
-          const active = event.id === selectedEventId;
-
-          return (
-            <button
-              key={event.id}
-              onClick={() => onSelect(event.id)}
-              className={`w-full rounded-2xl border p-4 text-left transition ${
-                active
-                  ? "border-emerald-200 bg-emerald-50/70 shadow-sm"
-                  : "border-transparent bg-white hover:border-slate-200 hover:bg-slate-50"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-950">
-                    {event.title}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {formatDate(event.startTime)}
-                  </p>
-                </div>
-
-                <span className="shrink-0 text-xs font-semibold text-slate-600">
-                  {formatTime(event.startTime)}
-                </span>
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200">
-                  {getDuration(event.startTime, event.endTime)}
-                </span>
-
-                {event.meetingUrl && (
-                  <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                    Video
-                  </span>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function DetailRow({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 rounded-xl bg-white px-4 py-3 text-sm ring-1 ring-slate-200">
-      <div className="flex items-center gap-3 text-slate-500">
-        <Icon className="h-4 w-4" />
-        <span>{label}</span>
-      </div>
-
-      <span className="max-w-[60%] text-right font-medium text-slate-900">
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function CalendarAssistantPanel({
-  events,
-  selectedEvent,
-}: {
-  events: CalendarEvent[];
-  selectedEvent: CalendarEvent | null;
-}) {
-  const todayEvents = events.filter((event) => isToday(event.startTime));
-  const nextEvent = events[0] || null;
-
-  return (
-    <aside className="flex h-screen w-[20%] min-w-[300px] max-w-[360px] flex-col overflow-hidden border-l border-slate-200 bg-white">
-      <div className="flex h-20 items-center justify-between border-b border-slate-200 px-6">
+    <aside className="flex h-screen w-[20%] min-w-[300px] max-w-[360px] flex-col overflow-hidden border-l border-slate-200 bg-slate-50">
+      <div className="flex h-20 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5">
         <div className="flex items-center gap-3">
           <PulseMark size="sm" />
           <div>
-            <h2 className="text-lg font-semibold text-slate-950">pulse AI</h2>
-            <p className="text-xs text-slate-500">Calendar context</p>
+            <h2 className="text-base font-semibold text-slate-950">pulse AI</h2>
+            <p className="text-xs text-slate-500">Calendar copilot</p>
           </div>
         </div>
 
-        <div className="rounded-full bg-emerald-50 p-2 text-emerald-700">
-          <CalendarDays className="h-4 w-4" />
-        </div>
+        <button
+          onClick={onClose}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-800"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-        <div className="space-y-5">
-          <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Schedule brief
-            </p>
+      <div className="calendar-ai-scroll min-h-0 flex-1 overflow-y-auto px-5 py-5">
+        {messages.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center text-center">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100">
+              <Bot className="h-5 w-5" />
+            </div>
 
-            <h3 className="mt-2 text-base font-semibold text-slate-950">
-              {todayEvents.length} events today
+            <h3 className="text-sm font-semibold text-slate-950">
+              Ask pulse AI
             </h3>
 
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {nextEvent
-                ? `Next event: ${nextEvent.title} at ${formatTime(nextEvent.startTime)}.`
-                : "No upcoming events found yet."}
+            <p className="mt-2 max-w-[220px] text-sm leading-6 text-slate-500">
+              Ask about meetings, schedule, busy days, or Calendar sync.
             </p>
-          </section>
+          </div>
+        ) : (
+          <div className="space-y-5 pb-4">
+            {messages.map((message) => {
+              const isUser = message.role === "user";
 
-          {selectedEvent && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
-              <h3 className="text-sm font-semibold text-slate-950">
-                Selected event
-              </h3>
-
-              <div className="mt-4 space-y-2">
-                <PanelRow label="Title" value={selectedEvent.title} />
-                <PanelRow label="Date" value={formatDate(selectedEvent.startTime)} />
-                <PanelRow label="Time" value={formatTime(selectedEvent.startTime)} />
-                <PanelRow
-                  label="Attendees"
-                  value={String(getAttendees(selectedEvent.attendees).length)}
-                />
-              </div>
-
-              {selectedEvent.meetingUrl && (
-                <a
-                  href={selectedEvent.meetingUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800"
+              return (
+                <div
+                  key={message.id}
+                  className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                 >
-                  <ExternalLink className="h-4 w-4" />
-                  Open meeting link
-                </a>
-              )}
-            </section>
-          )}
+                  <div
+                    className={
+                      isUser
+                        ? "max-w-[88%] rounded-2xl bg-slate-800 px-4 py-3 text-sm leading-6 text-white"
+                        : "max-w-[92%] text-sm leading-6 text-slate-700"
+                    }
+                  >
+                    {!isUser && (
+                      <div className="mb-1 flex items-center gap-2">
+                        <span className="font-semibold text-slate-950">
+                          pulse AI
+                        </span>
+                        <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
+                      </div>
+                    )}
 
-          <section className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
-            <p className="text-sm leading-6 text-emerald-800">
-              Calendar is now part of pulse context. In the next phase, pulse will create approved meetings from emails.
-            </p>
-          </section>
+                    <div className="whitespace-pre-wrap">{message.content}</div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {isThinking && (
+              <div className="flex justify-start">
+                <div className="flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm text-slate-500 ring-1 ring-slate-200">
+                  <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />
+                  Thinking...
+                </div>
+              </div>
+            )}
+
+            <div ref={bottomRef} />
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 border-t border-slate-200 bg-white p-4">
+        <div className="rounded-2xl border border-slate-200 bg-slate-100 p-2">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              rows={1}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  handleSubmit();
+                }
+              }}
+              placeholder="Ask about calendar..."
+              className="max-h-[120px] min-h-10 flex-1 resize-none border-none bg-transparent px-2 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-500"
+            />
+
+            <button
+              onClick={handleSubmit}
+              disabled={isThinking || !input.trim()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-white transition hover:bg-emerald-800 active:bg-emerald-900 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isThinking ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+            </button>
+          </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        .calendar-ai-scroll {
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+
+        .calendar-ai-scroll::-webkit-scrollbar {
+          display: none;
+          width: 0;
+          height: 0;
+        }
+      `}</style>
     </aside>
   );
 }
 
-function PanelRow({ label, value }: { label: string; value: string }) {
+function InsightCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
-      <span className="text-sm text-slate-600">{label}</span>
-      <span className="text-sm font-semibold text-slate-950">{value}</span>
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-2 text-lg font-semibold text-slate-950">{value}</p>
+      <p className="mt-1 text-sm leading-6 text-slate-500">{detail}</p>
     </div>
   );
 }

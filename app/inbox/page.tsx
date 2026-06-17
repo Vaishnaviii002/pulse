@@ -439,6 +439,38 @@ export default function InboxPage() {
   }, [loadMessages]);
 
   useEffect(() => {
+  function handleAutoSyncComplete() {
+    void loadMessages();
+  }
+
+  window.addEventListener("pulse:auto-sync-complete", handleAutoSyncComplete);
+
+  return () => {
+    window.removeEventListener(
+      "pulse:auto-sync-complete",
+      handleAutoSyncComplete
+    );
+  };
+}, [loadMessages]);
+
+  useEffect(() => {
+  const intervalId = window.setInterval(() => {
+    void loadMessages();
+  }, 30000);
+
+  function handleFocus() {
+    void loadMessages();
+  }
+
+  window.addEventListener("focus", handleFocus);
+
+  return () => {
+    window.clearInterval(intervalId);
+    window.removeEventListener("focus", handleFocus);
+  };
+}, [loadMessages]);
+
+  useEffect(() => {
     if (!selectedMessageId) {
       setAnalysis(null);
       setReplyDraft("");

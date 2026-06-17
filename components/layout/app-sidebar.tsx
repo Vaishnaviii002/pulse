@@ -36,7 +36,7 @@ const navItems = [
     icon: CalendarDays,
   },
   {
-    label: "Workflow",
+    label: "Tasks",
     href: "/workflow",
     icon: Network,
   },

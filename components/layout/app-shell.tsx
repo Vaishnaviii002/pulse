@@ -2,6 +2,7 @@ import AppSidebar from "@/components/layout/app-sidebar";
 import { PulseAiPanel } from "@/components/layout/pulse-ai-panel";
 import { TopHeader } from "@/components/layout/top-header";
 import { SyncUser } from "@/components/auth/sync-user";
+import { AutoRealtimeSync } from "@/components/auth/auto-realtime-sync";
 
 type AppShellProps = {
   children: React.ReactNode;
@@ -30,6 +31,7 @@ export function AppShell({
       ].join(" ")}
     >
       <SyncUser />
+      <AutoRealtimeSync />
 
       <AppSidebar />
 

@@ -15,6 +15,13 @@ const isProtectedRoute = createRouteMatcher([
   "/api/workflows(.*)",
   "/api/pulse-ai(.*)",
   "/api/ai(.*)",
+  "/api/meetings(.*)",
+  "/meetings(.*)",
+  "/api/realtime(.*)",
+  "/api/gmail(.*)",
+  "/api/calendar(.*)",
+  "/api/meetings(.*)",
+  "/api/corsair/webhook",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {
@@ -32,7 +39,7 @@ export default clerkMiddleware(async (auth, req) => {
           success: false,
           error: "Unauthorized. Please sign in again.",
         },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
