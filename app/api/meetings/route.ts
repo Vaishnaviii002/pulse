@@ -190,7 +190,7 @@ export async function GET() {
       new Set(
         events
           .map((event: any) => getSourceEmailId(event))
-          .filter((id): id is string => Boolean(id))
+          .filter((id: string | null | undefined): id is string => Boolean(id))
       )
     );
 
