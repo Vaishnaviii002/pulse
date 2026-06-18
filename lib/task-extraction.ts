@@ -5,24 +5,49 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+type TaskType =
+  | "GENERAL"
+  | "EMAIL"
+  | "FORM"
+  | "ASSESSMENT"
+  | "INTERVIEW"
+  | "MEETING"
+  | "FOLLOW_UP"
+  | "PLACEMENT";
+
+type TaskPriority = "HIGH" | "MEDIUM" | "LOW";
+
 type ExtractedTask = {
   sourceEmailId: string;
   title: string;
   description: string;
-  type:
-    | "GENERAL"
-    | "EMAIL"
-    | "FORM"
-    | "ASSESSMENT"
-    | "INTERVIEW"
-    | "MEETING"
-    | "FOLLOW_UP"
-    | "PLACEMENT";
-  priority: "HIGH" | "MEDIUM" | "LOW";
+  type: TaskType;
+  priority: TaskPriority;
   dueAt: string | null;
   detectedAction: string;
-  confidence: "HIGH" | "MEDIUM" | "LOW";
+  confidence: TaskPriority;
   relatedLink: string | null;
+};
+
+type EmailMessageItem = {
+  id: string;
+  externalMessageId: string | null;
+  subject: string | null;
+  snippet: string | null;
+  bodyText: string | null;
+  bodyHtml?: string | null;
+  fromName: string | null;
+  fromEmail: string | null;
+  receivedAt: Date | null;
+};
+
+type ExistingTaskItem = {
+  sourceEmailId: string | null;
+  title: string;
+};
+
+type ParsedTaskResponse = {
+  tasks?: ExtractedTask[];
 };
 
 function cleanEmailText(text: string) {
@@ -39,19 +64,47 @@ function extractLinks(text: string) {
   return Array.from(new Set(matches)).slice(0, 8);
 }
 
-function safeParseJson(text: string) {
+function safeParseJson(text: string): ParsedTaskResponse | null {
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as ParsedTaskResponse;
   } catch {
     const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
+
+    if (!match) {
+      return null;
+    }
 
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(match[0]) as ParsedTaskResponse;
     } catch {
       return null;
     }
   }
+}
+
+function normalizeTaskType(value: unknown): TaskType {
+  const allowedTypes: TaskType[] = [
+    "GENERAL",
+    "EMAIL",
+    "FORM",
+    "ASSESSMENT",
+    "INTERVIEW",
+    "MEETING",
+    "FOLLOW_UP",
+    "PLACEMENT",
+  ];
+
+  return allowedTypes.includes(value as TaskType)
+    ? (value as TaskType)
+    : "GENERAL";
+}
+
+function normalizePriority(value: unknown): TaskPriority {
+  const allowedPriorities: TaskPriority[] = ["HIGH", "MEDIUM", "LOW"];
+
+  return allowedPriorities.includes(value as TaskPriority)
+    ? (value as TaskPriority)
+    : "MEDIUM";
 }
 
 export async function extractTasksFromRecentEmails({
@@ -61,7 +114,7 @@ export async function extractTasksFromRecentEmails({
   appUserId: string;
   limit?: number;
 }) {
-  const emails = await prisma.emailMessage.findMany({
+  const emails = (await prisma.emailMessage.findMany({
     where: {
       userId: appUserId,
       direction: "INBOUND",
@@ -70,7 +123,7 @@ export async function extractTasksFromRecentEmails({
       receivedAt: "desc",
     },
     take: limit,
-  });
+  })) as EmailMessageItem[];
 
   if (!emails.length) {
     return {
@@ -81,41 +134,46 @@ export async function extractTasksFromRecentEmails({
     };
   }
 
-  const existingTasks = await prisma.task.findMany({
+  const emailIds = emails.map((email: EmailMessageItem) => email.id);
+
+  const existingTasks = (await prisma.task.findMany({
     where: {
       userId: appUserId,
       source: "EMAIL",
       sourceEmailId: {
-        in: emails.map((email) => email.id),
+        in: emailIds,
       },
     },
     select: {
       sourceEmailId: true,
       title: true,
     },
-  });
+  })) as ExistingTaskItem[];
 
   const existingKeys = new Set(
-    existingTasks.map(
-      (task) =>
-        `${task.sourceEmailId || ""}::${task.title.toLowerCase().trim()}`
-    )
+    existingTasks.map((task: ExistingTaskItem) => {
+      return `${task.sourceEmailId || ""}::${task.title
+        .toLowerCase()
+        .trim()}`;
+    }),
   );
 
   const now = new Date();
 
   const emailContext = emails
-    .map((email, index) => {
+    .map((email: EmailMessageItem, index: number) => {
       const body = cleanEmailText(
-        email.bodyText || email.snippet || "No body available."
+        email.bodyText || email.snippet || "No body available.",
       );
 
-      const links = extractLinks(`${email.bodyText || ""}\n${email.snippet || ""}`);
+      const links = extractLinks(
+        `${email.bodyText || ""}\n${email.snippet || ""}`,
+      );
 
       return `
 EMAIL ${index + 1}
 id: ${email.id}
-from: ${email.fromName || ""} <${email.fromEmail}>
+from: ${email.fromName || ""} <${email.fromEmail || "unknown"}>
 subject: ${email.subject || "(No subject)"}
 receivedAt: ${email.receivedAt?.toISOString() || "Unknown"}
 links:
@@ -198,14 +256,16 @@ Return only valid JSON:
   const parsed = safeParseJson(response.output_text || "");
 
   const extractedTasks = Array.isArray(parsed?.tasks)
-    ? (parsed.tasks as ExtractedTask[])
+    ? parsed.tasks
     : [];
 
   let created = 0;
   let skipped = 0;
 
   for (const task of extractedTasks) {
-    const sourceEmail = emails.find((email) => email.id === task.sourceEmailId);
+    const sourceEmail = emails.find(
+      (email: EmailMessageItem) => email.id === task.sourceEmailId,
+    );
 
     if (!sourceEmail || !task.title?.trim()) {
       skipped += 1;
@@ -226,13 +286,10 @@ Return only valid JSON:
         userId: appUserId,
         title: task.title.trim(),
         description: task.description?.trim() || "",
-        type: task.type || "GENERAL",
-        priority: task.priority || "MEDIUM",
+        type: normalizeTaskType(task.type),
+        priority: normalizePriority(task.priority),
         status: "OPEN",
-        dueAt:
-          dueAt && !Number.isNaN(dueAt.getTime())
-            ? dueAt
-            : null,
+        dueAt: dueAt && !Number.isNaN(dueAt.getTime()) ? dueAt : null,
         source: "EMAIL",
         sourceEmailId: sourceEmail.id,
         sourceEmailSubject: sourceEmail.subject || "(No subject)",
@@ -242,7 +299,7 @@ Return only valid JSON:
           extractedBy: "pulse AI",
           extractedAt: new Date().toISOString(),
           detectedAction: task.detectedAction || "",
-          confidence: task.confidence || "MEDIUM",
+          confidence: normalizePriority(task.confidence),
           relatedLink: task.relatedLink || null,
           emailExternalMessageId: sourceEmail.externalMessageId,
         },
