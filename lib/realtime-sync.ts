@@ -7,8 +7,18 @@ type WebhookSyncInput = {
   body: unknown;
 };
 
+type ConnectedAccountItem = {
+  id: string;
+  userId: string;
+  provider: string;
+  status: string;
+};
+
 function getRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
   return value as Record<string, unknown>;
 }
 
@@ -40,8 +50,15 @@ function inferProvider(headers: Record<string, string>, body: unknown) {
     body,
   }).toLowerCase();
 
-  if (text.includes("gmail") || text.includes("message")) return "gmail";
-  if (text.includes("googlecalendar") || text.includes("calendar") || text.includes("event")) {
+  if (text.includes("gmail") || text.includes("message")) {
+    return "gmail";
+  }
+
+  if (
+    text.includes("googlecalendar") ||
+    text.includes("calendar") ||
+    text.includes("event")
+  ) {
     return "calendar";
   }
 
@@ -63,7 +80,10 @@ function extractTenantId(headers: Record<string, string>, body: unknown) {
   );
 }
 
-export async function syncFromWebhookPayload({ headers, body }: WebhookSyncInput) {
+export async function syncFromWebhookPayload({
+  headers,
+  body,
+}: WebhookSyncInput) {
   const tenantId = extractTenantId(headers, body);
   const provider = inferProvider(headers, body);
 
@@ -90,18 +110,22 @@ export async function syncFromWebhookPayload({ headers, body }: WebhookSyncInput
     };
   }
 
-  const accounts = await prisma.connectedAccount.findMany({
+  const accounts = (await prisma.connectedAccount.findMany({
     where: {
       userId: appUser.id,
       status: "CONNECTED",
     },
-  });
+  })) as ConnectedAccountItem[];
 
-  const hasGmail = accounts.some((account) => account.provider === "CORSAIR_GMAIL");
+  const hasGmail = accounts.some(
+    (account: ConnectedAccountItem) =>
+      account.provider === "CORSAIR_GMAIL",
+  );
+
   const hasCalendar = accounts.some(
-    (account) =>
+    (account: ConnectedAccountItem) =>
       account.provider === "CORSAIR_CALENDAR" ||
-      account.provider === "GOOGLE_CALENDAR"
+      account.provider === "GOOGLE_CALENDAR",
   );
 
   const result: Record<string, unknown> = {
