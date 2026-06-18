@@ -184,12 +184,12 @@ export async function GET() {
       take: 120,
     });
 
-    const eventIds = events.map((event) => event.id);
+    const eventIds = events.map((event: any) => event.id);
 
     const sourceEmailIds = Array.from(
       new Set(
         events
-          .map((event) => getSourceEmailId(event))
+          .map((event: any) => getSourceEmailId(event))
           .filter((id): id is string => Boolean(id))
       )
     );
@@ -278,7 +278,7 @@ export async function GET() {
       auditMap.set(key, current);
     }
 
-    const meetings = events.map((event) => {
+    const meetings = events.map((event: any) => {
       const sourceEmailId = getSourceEmailId(event);
 
       const sourceEmail = sourceEmailId
