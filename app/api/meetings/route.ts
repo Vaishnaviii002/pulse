@@ -154,7 +154,7 @@ export async function GET() {
           success: false,
           error: "Unauthorized. Please sign in again.",
         },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -170,7 +170,7 @@ export async function GET() {
           success: false,
           error: "User not synced in database.",
         },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
@@ -190,8 +190,8 @@ export async function GET() {
       new Set(
         events
           .map((event: any) => getSourceEmailId(event))
-          .filter((id: string | null | undefined): id is string => Boolean(id))
-      )
+          .filter((id: string | null | undefined): id is string => Boolean(id)),
+      ),
     );
 
     const sourceEmails = sourceEmailIds.length
@@ -209,7 +209,7 @@ export async function GET() {
       : [];
 
     const sourceEmailMap = new Map(
-      sourceEmails.map((email) => [email.id, email])
+      sourceEmails.map((email: any) => [email.id, email]),
     );
 
     let workflows: any[] = [];
@@ -333,7 +333,7 @@ export async function GET() {
         total: meetings.length,
         fromEmail: meetings.filter((meeting) => meeting.sourceEmailId).length,
         needsPrep: meetings.filter(
-          (meeting) => meeting.readiness.label !== "Ready"
+          (meeting) => meeting.readiness.label !== "Ready",
         ).length,
         withMeetLink: meetings.filter((meeting) => meeting.meetingUrl).length,
       },
@@ -347,7 +347,7 @@ export async function GET() {
         error:
           error instanceof Error ? error.message : "Failed to load meetings.",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
