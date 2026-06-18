@@ -10,6 +10,7 @@ import {
   CircleAlert,
   ClipboardList,
   Clock,
+  FileText,
   Inbox,
   Loader2,
   Mail,
@@ -47,6 +48,12 @@ type FilterKey = "ALL" | "TODAY" | "PRIORITY" | "COMPLETED" | "REMAINING";
 type AiTrigger = {
   id: number;
   command: string;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -173,8 +180,8 @@ export default function TasksPage() {
   const [manualDueAt, setManualDueAt] = useState("");
 
   const selectedTask = useMemo(
-    () => tasks.find((task) => task.id === selectedTaskId) || null,
-    [tasks, selectedTaskId]
+    () => tasks.find((task: TaskItem) => task.id === selectedTaskId) || null,
+    [tasks, selectedTaskId],
   );
 
   const loadTasks = useCallback(async () => {
@@ -196,7 +203,7 @@ export default function TasksPage() {
       setTasks(data.tasks || []);
     } catch (error) {
       setPageError(
-        error instanceof Error ? error.message : "Failed to load tasks."
+        error instanceof Error ? error.message : "Failed to load tasks.",
       );
     } finally {
       setIsLoading(false);
@@ -222,13 +229,13 @@ export default function TasksPage() {
       window.clearInterval(intervalId);
       window.removeEventListener(
         "pulse:auto-sync-complete",
-        handleAutoSyncComplete
+        handleAutoSyncComplete,
       );
     };
   }, [loadTasks]);
 
   const filteredTasks = useMemo(() => {
-    return tasks.filter((task) => {
+    return tasks.filter((task: TaskItem) => {
       if (activeFilter === "TODAY") return isToday(task.dueAt);
       if (activeFilter === "PRIORITY") return task.priority === "HIGH";
       if (activeFilter === "COMPLETED") return task.status === "DONE";
@@ -257,7 +264,7 @@ export default function TasksPage() {
       setPageSuccess(
         `Analyzed ${data.scanned || 0} emails. Created ${
           data.created || 0
-        } new task(s).`
+        } new task(s).`,
       );
 
       await loadTasks();
@@ -265,7 +272,7 @@ export default function TasksPage() {
       setPageError(
         error instanceof Error
           ? error.message
-          : "Failed to analyze Gmail for tasks."
+          : "Failed to analyze Gmail for tasks.",
       );
     } finally {
       setIsExtracting(false);
@@ -309,7 +316,7 @@ export default function TasksPage() {
       await loadTasks();
     } catch (error) {
       setPageError(
-        error instanceof Error ? error.message : "Failed to create task."
+        error instanceof Error ? error.message : "Failed to create task.",
       );
     } finally {
       setIsCreating(false);
@@ -340,7 +347,7 @@ export default function TasksPage() {
       await loadTasks();
     } catch (error) {
       setPageError(
-        error instanceof Error ? error.message : "Failed to update task."
+        error instanceof Error ? error.message : "Failed to update task.",
       );
     }
   }
@@ -495,7 +502,7 @@ export default function TasksPage() {
                         onChange={(event) => setManualType(event.target.value)}
                         className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-emerald-300"
                       >
-                        {TASK_TYPES.map((type) => (
+                        {TASK_TYPES.map((type: string) => (
                           <option key={type}>{type}</option>
                         ))}
                       </select>
@@ -566,7 +573,7 @@ export default function TasksPage() {
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100">
-                    {filteredTasks.map((task) => (
+                    {filteredTasks.map((task: TaskItem) => (
                       <TaskRow
                         key={task.id}
                         task={task}
@@ -574,7 +581,7 @@ export default function TasksPage() {
                         onAskAi={() => {
                           setSelectedTaskId(task.id);
                           triggerPulseAi(
-                            "Explain this task properly. What do I need to do, what is the deadline, and what should be my next step?"
+                            "Explain this task properly. What do I need to do, what is the deadline, and what should be my next step?",
                           );
                         }}
                       />
@@ -589,7 +596,7 @@ export default function TasksPage() {
               onBack={handleBackToList}
               onAskAi={() =>
                 triggerPulseAi(
-                  "Analyze this selected task properly and tell me what I should do next."
+                  "Analyze this selected task properly and tell me what I should do next.",
                 )
               }
               onMarkProgress={() =>
@@ -658,7 +665,7 @@ function TaskRow({
 
       <span
         className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${getPriorityClass(
-          task.priority
+          task.priority,
         )}`}
       >
         {task.priority}
@@ -666,7 +673,7 @@ function TaskRow({
 
       <span
         className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${getStatusClass(
-          task.status
+          task.status,
         )}`}
       >
         {task.status.replace("_", " ")}
@@ -741,7 +748,7 @@ function SelectedTaskWorkspace({
         <div className="flex shrink-0 gap-2">
           <span
             className={`rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${getPriorityClass(
-              task.priority
+              task.priority,
             )}`}
           >
             {task.priority}
@@ -749,7 +756,7 @@ function SelectedTaskWorkspace({
 
           <span
             className={`rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${getStatusClass(
-              task.status
+              task.status,
             )}`}
           >
             {task.status.replace("_", " ")}
@@ -840,7 +847,9 @@ function SelectedTaskWorkspace({
                 • Check deadline, duration, allowed attempts, and required
                 documents.
               </p>
-              <p>• Complete it before the deadline and mark this task completed.</p>
+              <p>
+                • Complete it before the deadline and mark this task completed.
+              </p>
             </>
           )}
 
@@ -865,7 +874,9 @@ function SelectedTaskWorkspace({
           task.type === "EMAIL" ? (
             <>
               <p>• Review the source email context.</p>
-              <p>• Decide whether reply, form submission, or follow-up is needed.</p>
+              <p>
+                • Decide whether reply, form submission, or follow-up is needed.
+              </p>
               <p>• Complete the action and mark this task completed.</p>
             </>
           ) : null}
@@ -888,9 +899,7 @@ function TaskCopilotPanel({
 }) {
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
-  const [messages, setMessages] = useState<
-    { id: string; role: "user" | "assistant"; content: string }[]
-  >([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const lastTriggerIdRef = useRef<number | null>(null);
@@ -907,7 +916,7 @@ function TaskCopilotPanel({
     if (lastTriggerIdRef.current === trigger.id) return;
 
     lastTriggerIdRef.current = trigger.id;
-    submitQuestion(trigger.command);
+    void submitQuestion(trigger.command);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trigger]);
 
@@ -931,13 +940,13 @@ Related link: ${getMetadataValue(selectedTask.metadata, "relatedLink")}
       : "No task selected.";
 
     const openTasks = tasks
-      .filter((task) => task.status !== "DONE")
+      .filter((task: TaskItem) => task.status !== "DONE")
       .slice(0, 20)
       .map(
-        (task) =>
+        (task: TaskItem) =>
           `- ${task.title} | ${task.type} | ${task.priority} | due: ${
             task.dueAt || "none"
-          } | source: ${task.source}`
+          } | source: ${task.source}`,
       )
       .join("\n");
 
@@ -957,7 +966,7 @@ ${openTasks || "No open tasks."}
     setInput("");
     setIsThinking(true);
 
-    setMessages((current) => [
+    setMessages((current: ChatMessage[]) => [
       ...current,
       {
         id: `user-${Date.now()}`,
@@ -999,7 +1008,7 @@ ${taskContext()}
         throw new Error(data.error || "pulse AI failed to answer.");
       }
 
-      setMessages((current) => [
+      setMessages((current: ChatMessage[]) => [
         ...current,
         {
           id: `assistant-${Date.now()}`,
@@ -1008,7 +1017,7 @@ ${taskContext()}
         },
       ]);
     } catch (error) {
-      setMessages((current) => [
+      setMessages((current: ChatMessage[]) => [
         ...current,
         {
           id: `assistant-${Date.now()}`,
@@ -1025,7 +1034,7 @@ ${taskContext()}
   }
 
   function handleSubmit() {
-    submitQuestion(input);
+    void submitQuestion(input);
   }
 
   return (
@@ -1067,7 +1076,7 @@ ${taskContext()}
           </div>
         ) : (
           <div className="space-y-5 pb-4">
-            {messages.map((message) => {
+            {messages.map((message: ChatMessage) => {
               const isUser = message.role === "user";
 
               return (
