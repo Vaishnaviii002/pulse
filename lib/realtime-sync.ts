@@ -31,20 +31,29 @@ function deepFindString(value: unknown, keys: string[]): string {
 
   for (const key of keys) {
     const direct = getString(record[key]);
-    if (direct) return direct;
+
+    if (direct) {
+      return direct;
+    }
   }
 
   for (const item of Object.values(record)) {
     if (item && typeof item === "object") {
       const nested = deepFindString(item, keys);
-      if (nested) return nested;
+
+      if (nested) {
+        return nested;
+      }
     }
   }
 
   return "";
 }
 
-function inferProvider(headers: Record<string, string>, body: unknown) {
+function inferProvider(
+  headers: Record<string, string>,
+  body: unknown,
+): "gmail" | "calendar" | "unknown" {
   const text = JSON.stringify({
     headers,
     body,
@@ -65,7 +74,10 @@ function inferProvider(headers: Record<string, string>, body: unknown) {
   return "unknown";
 }
 
-function extractTenantId(headers: Record<string, string>, body: unknown) {
+function extractTenantId(
+  headers: Record<string, string>,
+  body: unknown,
+): string {
   return (
     headers["x-corsair-tenant-id"] ||
     headers["x-tenant-id"] ||
