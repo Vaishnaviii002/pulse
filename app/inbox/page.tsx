@@ -1,9 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, ElementType, SetStateAction } from "react";
+import type {
+  Dispatch,
+  ElementType,
+  KeyboardEvent,
+  SetStateAction,
+} from "react";
 import Link from "next/link";
 import {
+  Archive,
   ArrowLeft,
   Bot,
   CalendarPlus,
@@ -11,16 +17,21 @@ import {
   CircleAlert,
   ClipboardList,
   CornerUpLeft,
+  ExternalLink,
   FolderOpen,
   Inbox,
   Loader2,
   Mail,
+  MoreVertical,
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
+  Reply,
   Search,
   Send,
   Sparkles,
+  Star,
+  Trash2,
   Wand2,
   X,
 } from "lucide-react";
@@ -139,14 +150,12 @@ function createEmptyMeetingForm(): MeetingForm {
 function formatDateTime(value?: string | null) {
   if (!value) return "Unknown time";
 
-  const date = new Date(value);
-
   return new Intl.DateTimeFormat("en-IN", {
     day: "numeric",
     month: "short",
     hour: "numeric",
     minute: "2-digit",
-  }).format(date);
+  }).format(new Date(value));
 }
 
 function formatShortTime(value?: string | null) {
@@ -238,6 +247,11 @@ function getMeetingTimesFromCommand(command?: string) {
 
 function getSenderName(message: InboxMessage) {
   return message.fromName?.trim() || message.fromEmail || "Unknown sender";
+}
+
+function getSenderInitial(message: InboxMessage) {
+  const name = getSenderName(message).trim();
+  return name.charAt(0).toUpperCase() || "M";
 }
 
 function cleanVisibleEmailText(text: string) {
@@ -334,6 +348,64 @@ async function readJson(response: Response) {
         "Server returned invalid JSON. Please sign in again or restart the app.",
     };
   }
+}
+
+function buildEmailSrcDoc(html: string) {
+  const frameStyles = `
+    <base target="_blank" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        color-scheme: light dark;
+        overflow-wrap: anywhere;
+      }
+
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      img {
+        max-width: 100% !important;
+        height: auto !important;
+      }
+
+      table {
+        max-width: 100% !important;
+      }
+
+      a {
+        color: #0b57d0;
+      }
+
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  `;
+
+  if (/<html[\s>]/i.test(html)) {
+    if (/<head[\s>]/i.test(html)) {
+      return html.replace(/<head([^>]*)>/i, `<head$1>${frameStyles}`);
+    }
+
+    return html.replace(
+      /<html([^>]*)>/i,
+      `<html$1><head>${frameStyles}</head>`,
+    );
+  }
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    ${frameStyles}
+  </head>
+  <body>
+    ${html}
+  </body>
+</html>`;
 }
 
 export default function InboxPage() {
@@ -439,36 +511,36 @@ export default function InboxPage() {
   }, [loadMessages]);
 
   useEffect(() => {
-  function handleAutoSyncComplete() {
-    void loadMessages();
-  }
+    function handleAutoSyncComplete() {
+      void loadMessages();
+    }
 
-  window.addEventListener("pulse:auto-sync-complete", handleAutoSyncComplete);
+    window.addEventListener("pulse:auto-sync-complete", handleAutoSyncComplete);
 
-  return () => {
-    window.removeEventListener(
-      "pulse:auto-sync-complete",
-      handleAutoSyncComplete
-    );
-  };
-}, [loadMessages]);
+    return () => {
+      window.removeEventListener(
+        "pulse:auto-sync-complete",
+        handleAutoSyncComplete,
+      );
+    };
+  }, [loadMessages]);
 
   useEffect(() => {
-  const intervalId = window.setInterval(() => {
-    void loadMessages();
-  }, 30000);
+    const intervalId = window.setInterval(() => {
+      void loadMessages();
+    }, 30000);
 
-  function handleFocus() {
-    void loadMessages();
-  }
+    function handleFocus() {
+      void loadMessages();
+    }
 
-  window.addEventListener("focus", handleFocus);
+    window.addEventListener("focus", handleFocus);
 
-  return () => {
-    window.clearInterval(intervalId);
-    window.removeEventListener("focus", handleFocus);
-  };
-}, [loadMessages]);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [loadMessages]);
 
   useEffect(() => {
     if (!selectedMessageId) {
@@ -563,6 +635,11 @@ export default function InboxPage() {
   function handleUseSuggestedReply() {
     if (!selectedMessage) return;
 
+    if (analysis && !analysis.requiresReply) {
+      setReplyDraft("");
+      return;
+    }
+
     const suggested =
       analysis?.suggestedReply?.trim() ||
       `Hi ${selectedMessage.fromName || ""},
@@ -574,49 +651,17 @@ Best regards`;
     setReplyDraft(suggested);
   }
 
-  function handlePrepareMeeting(commandText?: string) {
-    if (!selectedMessage) return;
-
-    const parsedTimes = getMeetingTimesFromCommand(commandText);
-    const { startTime, endTime } = parsedTimes || getDefaultMeetingTimes();
-
-    const aiAttendees = analysis?.meeting?.attendees || [];
-    const attendees = Array.from(
-      new Set([selectedMessage.fromEmail, ...aiAttendees].filter(Boolean)),
-    );
-
-    const title =
-      analysis?.meeting?.title?.trim() ||
-      `Meeting with ${selectedMessage.fromName || selectedMessage.fromEmail}`;
-
-    const aiDateText = analysis?.meeting?.dateText?.trim();
-    const aiTimeText = analysis?.meeting?.timeText?.trim();
-
-    const description = [
-      `Created by pulse from email: ${selectedMessage.subject}`,
-      "",
-      analysis?.summary ? `AI summary: ${analysis.summary}` : "",
-      aiDateText || aiTimeText
-        ? `AI extracted timing: ${[aiDateText, aiTimeText]
-            .filter(Boolean)
-            .join(" ")}`
-        : "",
-      "",
-      selectedMessage.snippet || "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    setMeetingForm({
-      title,
-      description,
-      location: "",
-      startTime,
-      endTime,
-      attendeesText: attendees.join(", "),
-      createMeetLink: true,
-    });
-  }
+  function handlePrepareMeeting() {
+  setMeetingForm({
+    title: "",
+    description: "",
+    location: "",
+    startTime: "",
+    endTime: "",
+    attendeesText: "",
+    createMeetLink: true,
+  });
+}
 
   async function handleSendReply() {
     if (!selectedMessage) return;
@@ -700,7 +745,15 @@ Best regards`;
         throw new Error(data.error || "Failed to create Calendar event.");
       }
 
-      setMeetingSuccess("Calendar event created successfully.");
+      setMeetingSuccess(
+  `Meeting created successfully: ${meetingForm.title} from ${formatDateTime(
+    startTime.toISOString(),
+  )} to ${formatDateTime(endTime.toISOString())}. ${
+    meetingForm.createMeetLink
+      ? "Google Meet link was requested."
+      : "Google Meet link was not requested."
+  }`,
+);
     } catch (error) {
       setPageError(
         error instanceof Error
@@ -732,7 +785,7 @@ Best regards`;
       <div className="flex h-full min-h-0 flex-col gap-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-950">
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-950">
               Smart Inbox
             </h1>
             <p className="mt-1 text-sm text-slate-600">
@@ -902,6 +955,16 @@ function InboxListView({
     return "PRIMARY";
   }
 
+  function handleRowKeyDown(
+    event: KeyboardEvent<HTMLDivElement>,
+    messageId: string,
+  ) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelectMessage(messageId);
+    }
+  }
+
   const tabMessages = messages.filter((message) => {
     if (activeTab === "PRIMARY") return getCategory(message) === "PRIMARY";
     if (activeTab === "PROMOTIONS")
@@ -935,7 +998,7 @@ function InboxListView({
   ];
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 bg-white px-5 py-4">
         <div className="flex items-center justify-between gap-4">
           <div className="relative w-full max-w-xl">
@@ -944,7 +1007,7 @@ function InboxListView({
               value={searchQuery}
               onChange={(event) => onSearchChange(event.target.value)}
               placeholder="Search mail"
-              className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white"
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white"
             />
           </div>
 
@@ -1025,10 +1088,13 @@ function InboxListView({
               const isMeeting = detectMeetingIntent(message);
 
               return (
-                <button
+                <div
                   key={message.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onSelectMessage(message.id)}
-                  className={`grid w-full grid-cols-[36px_36px_210px_minmax(0,1fr)_90px] items-center gap-3 px-5 py-3 text-left transition hover:bg-emerald-50/50 ${
+                  onKeyDown={(event) => handleRowKeyDown(event, message.id)}
+                  className={`grid w-full cursor-pointer grid-cols-[36px_36px_210px_minmax(0,1fr)_90px] items-center gap-3 px-5 py-3 text-left transition hover:bg-emerald-50/50 ${
                     message.isUnread ? "bg-white" : "bg-slate-50/50"
                   }`}
                 >
@@ -1038,12 +1104,13 @@ function InboxListView({
                   >
                     <input
                       type="checkbox"
+                      aria-label="Select email"
                       className="h-4 w-4 rounded border-slate-300 accent-emerald-700"
                     />
                   </div>
 
                   <div className="flex items-center justify-center text-slate-300">
-                    <span className="text-lg leading-none">☆</span>
+                    <Star className="h-4 w-4" />
                   </div>
 
                   <div className="min-w-0">
@@ -1100,13 +1167,19 @@ function InboxListView({
                           Unread
                         </span>
                       )}
+
+                      {message.bodyHtml && (
+                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700 ring-1 ring-violet-200">
+                          HTML
+                        </span>
+                      )}
                     </div>
                   </div>
 
                   <div className="text-right text-xs font-semibold text-slate-500">
                     {formatShortTime(message.receivedAt)}
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -1154,7 +1227,6 @@ function SelectedEmailWorkspace({
   onAiAction: (command: string) => void;
 }) {
   const [activeTool, setActiveTool] = useState<EmailWorkspaceTool | null>(null);
-  const [isHeaderCompact, setIsHeaderCompact] = useState(false);
   const [replyTone, setReplyTone] = useState<ReplyTone>("Professional");
   const [isGeneratingReply, setIsGeneratingReply] = useState(false);
   const [recentMeetings, setRecentMeetings] = useState<RecentMeetingItem[]>([]);
@@ -1173,6 +1245,11 @@ ${getReadableBody(message).slice(0, 2500)}
   }
 
   async function generateReplyDraft(tone: ReplyTone) {
+    if (analysis && !analysis.requiresReply) {
+      onReplyDraftChange("");
+      return;
+    }
+
     try {
       setIsGeneratingReply(true);
 
@@ -1242,6 +1319,15 @@ ${selectedEmailContext()}
 
   function runReply() {
     setActiveTool("REPLY");
+
+    if (analysis && !analysis.requiresReply) {
+      onAiAction(
+        "In one short line, explain that this selected email does not need a Gmail reply.",
+      );
+      onClearReply();
+      return;
+    }
+
     onAiAction(
       "In one short line, tell me you prepared a reply draft for this selected email.",
     );
@@ -1250,12 +1336,28 @@ ${selectedEmailContext()}
   }
 
   function runMeeting() {
-    setActiveTool("MEETING");
-    onPrepareMeeting();
-    onAiAction(
-      "In 2-3 short lines, check if this email needs a meeting and mention that the meeting draft is ready for approval.",
-    );
+  setActiveTool("MEETING");
+
+  if (!analysis) {
+    onAiAction("Check whether this selected email needs a meeting.");
+    return;
   }
+
+  const meetingNeeded =
+    Boolean(analysis.hasMeetingRequest) || Boolean(analysis.meeting.shouldCreate);
+
+  if (!meetingNeeded) {
+    onAiAction(
+      "In one short line, explain that no meeting is needed for this selected email.",
+    );
+    return;
+  }
+
+  onPrepareMeeting();
+  onAiAction(
+    "In one short line, say that this email may need a meeting and the user should manually enter the meeting details before approval.",
+  );
+}
 
   function runMom() {
     setActiveTool("MOM");
@@ -1273,103 +1375,619 @@ ${selectedEmailContext()}
   }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-      <div
-        className={`shrink-0 border-b border-slate-200 bg-white transition-all duration-200 ${
-          isHeaderCompact ? "px-6 py-3 shadow-sm" : "px-6 py-5"
-        }`}
-      >
-        {!isHeaderCompact && (
-          <button
-            onClick={onBack}
-            className="mb-5 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-          >
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-100 bg-white px-4">
+        <div className="flex items-center gap-1">
+          <GmailIconButton label="Back to inbox" onClick={onBack}>
             <ArrowLeft className="h-4 w-4" />
-            Back to inbox
-          </button>
+          </GmailIconButton>
+
+          <div className="mx-2 h-5 w-px bg-slate-200" />
+
+          <GmailIconButton label="Archive">
+            <Archive className="h-4 w-4" />
+          </GmailIconButton>
+
+          <GmailIconButton label="Delete">
+            <Trash2 className="h-4 w-4" />
+          </GmailIconButton>
+
+          <GmailIconButton label="More">
+            <MoreVertical className="h-4 w-4" />
+          </GmailIconButton>
+        </div>
+
+        {isAnalyzing && (
+          <div className="inline-flex shrink-0 items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Analyzing
+          </div>
         )}
+      </div>
 
-        <div className="flex items-start justify-between gap-5">
-          <div className="min-w-0">
-            <h2
-              className={`font-semibold tracking-tight text-slate-950 transition-all ${
-                isHeaderCompact ? "max-w-2xl truncate text-lg" : "text-3xl"
-              }`}
-            >
-              {message.subject || "(No subject)"}
-            </h2>
+      <div className="min-h-0 flex-1 overflow-y-auto bg-white">
+        <div className="sticky top-0 z-20 border-b border-slate-100 bg-white/95 px-6 py-3 backdrop-blur">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <h2 className="truncate text-xl font-semibold tracking-tight text-slate-950">
+                  {message.subject || "(No subject)"}
+                </h2>
 
-            {!isHeaderCompact && (
-              <>
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-600">
-                  <span className="font-medium text-slate-900">
+                <span className="shrink-0 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                  Inbox
+                </span>
+              </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2">
+              <ActionButton
+                icon={Sparkles}
+                label="Summarize"
+                active={activeTool === "SUMMARY"}
+                onClick={runSummarize}
+              />
+              <ActionButton
+                icon={Wand2}
+                label="Reply"
+                active={activeTool === "REPLY"}
+                onClick={runReply}
+              />
+              <ActionButton
+                icon={CalendarPlus}
+                label="Meeting"
+                active={activeTool === "MEETING"}
+                onClick={runMeeting}
+              />
+              <ActionButton
+                icon={ClipboardList}
+                label="MoM"
+                active={activeTool === "MOM"}
+                onClick={runMom}
+              />
+              <ActionButton
+                icon={FolderOpen}
+                label="Documents"
+                active={activeTool === "DOCUMENTS"}
+                onClick={runDocuments}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4">
+          <div className="flex items-start justify-between gap-5">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">
+                {getSenderInitial(message)}
+              </div>
+
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="truncate text-sm font-semibold text-slate-950">
                     {getSenderName(message)}
-                  </span>
-                  <span>•</span>
-                  <span>{message.fromEmail}</span>
-                  <span>•</span>
-                  <span>{formatDateTime(message.receivedAt)}</span>
+                  </p>
+
+                  <p className="truncate text-sm text-slate-500">
+                    &lt;{message.fromEmail}&gt;
+                  </p>
                 </div>
 
-                <div className="mt-2 text-sm text-slate-500">
-                  To: {message.toEmails.join(", ") || "—"}
-                </div>
-              </>
-            )}
+                <p className="mt-0.5 text-sm text-slate-500">
+                  to{" "}
+                  {message.toEmails.length ? message.toEmails.join(", ") : "me"}
+                </p>
+              </div>
+            </div>
+
+            <div className="shrink-0 text-right">
+              <p className="text-xs text-slate-500">
+                {formatDateTime(message.receivedAt)}
+              </p>
+
+              <div className="mt-2 flex justify-end gap-1">
+                <GmailIconButton label="Star">
+                  <Star className="h-4 w-4" />
+                </GmailIconButton>
+
+                <GmailIconButton label="Reply">
+                  <Reply className="h-4 w-4" />
+                </GmailIconButton>
+
+                <GmailIconButton label="More">
+                  <MoreVertical className="h-4 w-4" />
+                </GmailIconButton>
+              </div>
+            </div>
           </div>
 
-          {isAnalyzing && (
-            <div className="inline-flex shrink-0 items-center gap-2 rounded-full bg-slate-100 px-3 py-2 text-xs font-medium text-slate-600">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Analyzing
+          <div className="mt-4">
+            <GmailMessageBody message={message} />
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button className="inline-flex h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+              <Reply className="h-4 w-4" />
+              Reply
+            </button>
+
+            <button className="inline-flex h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+              <ExternalLink className="h-4 w-4" />
+              Forward
+            </button>
+          </div>
+
+          {!activeTool && (
+            <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-500">
+              Choose Summarize, Reply, Meeting, MoM, or Documents to generate a
+              detailed action panel for this email.
+            </div>
+          )}
+
+          {activeTool === "SUMMARY" && (
+            <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-emerald-700" />
+                <h3 className="text-sm font-semibold text-slate-950">
+                  Detailed summary
+                </h3>
+              </div>
+
+              <div className="space-y-5 text-sm leading-6 text-slate-700">
+                <div>
+                  <p className="mb-2 font-semibold text-slate-950">
+                    1. What is this email about?
+                  </p>
+
+                  <p>
+                    {analysis?.summary ||
+                      "pulse AI is still analyzing this email. Try again in a moment."}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="mb-2 font-semibold text-slate-950">
+                    2. What should you do next?
+                  </p>
+
+                  {analysis?.nextActions?.length ? (
+                    <ul className="space-y-2">
+                      {analysis.nextActions.map((action) => (
+                        <li key={action} className="flex gap-2">
+                          <span className="mt-[1px] text-emerald-700">•</span>
+                          <span>{action}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No clear next action is needed from this email.</p>
+                  )}
+                </div>
+
+                <div>
+                  <p className="mb-2 font-semibold text-slate-950">
+                    3. Does this need a reply?
+                  </p>
+
+                  <p>
+                    {analysis
+                      ? analysis.requiresReply
+                        ? "Yes, this email needs a reply."
+                        : "No, this email does not need a reply."
+                      : "Checking reply requirement..."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTool === "REPLY" && (
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/30 p-5">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <CornerUpLeft className="h-4 w-4 text-emerald-700" />
+                  <h3 className="text-sm font-semibold text-slate-950">
+                    Reply draft
+                  </h3>
+                </div>
+
+                {isGeneratingReply && (
+                  <div className="inline-flex items-center gap-2 text-xs text-slate-500">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
+                    Generating
+                  </div>
+                )}
+              </div>
+
+              {analysis && !analysis.requiresReply ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
+                  pulse AI did not detect a real Gmail reply requirement for
+                  this email. You can still write one manually, but sending
+                  should be intentional.
+                </div>
+              ) : null}
+
+              <div className="mb-4 mt-4 flex flex-wrap gap-2">
+                {REPLY_TONES.map((tone) => (
+                  <button
+                    key={tone}
+                    onClick={() => {
+                      setReplyTone(tone);
+                      void generateReplyDraft(tone);
+                    }}
+                    className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
+                      replyTone === tone
+                        ? "bg-emerald-700 text-white"
+                        : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-emerald-50 hover:text-emerald-800"
+                    }`}
+                  >
+                    {tone}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid gap-4">
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                  To: {message.fromEmail}
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                  Subject:{" "}
+                  {message.subject.startsWith("Re:")
+                    ? message.subject
+                    : `Re: ${message.subject}`}
+                </div>
+
+                <textarea
+                  value={replyDraft}
+                  onChange={(event) => onReplyDraftChange(event.target.value)}
+                  className="min-h-[220px] w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-emerald-300"
+                  placeholder="Generated reply will appear here..."
+                />
+
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-slate-500">
+                    pulse prepares the draft. You approve before sending.
+                  </p>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={onClearReply}
+                      className="inline-flex h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Clear
+                    </button>
+
+                    <button
+                      onClick={onSendReply}
+                      disabled={isSendingReply || !replyDraft.trim()}
+                      className="inline-flex h-11 items-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSendingReply ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                      {isSendingReply ? "Sending..." : "Send reply"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTool === "MEETING" && (
+  <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-5">
+    <div className="mb-4 flex items-center gap-2">
+      <CalendarPlus className="h-4 w-4 text-emerald-700" />
+      <h3 className="text-sm font-semibold text-slate-950">
+        Meeting details
+      </h3>
+    </div>
+
+    {!analysis ? (
+      <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
+        pulse AI is checking whether this email needs a meeting. Try again in a
+        moment.
+      </div>
+    ) : !analysis.hasMeetingRequest && !analysis.meeting.shouldCreate ? (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
+        <p className="font-semibold text-amber-900">No meeting needed</p>
+        <p className="mt-2">
+          This email does not look like a real meeting request, so pulse will
+          not prepare a Calendar event for it.
+        </p>
+      </div>
+    ) : (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
+          Manually add the meeting heading, short note, date, time, attendees,
+          location, and Google Meet option. These same details will be saved and
+          shown in the Meetings page after the event is created.
+        </div>
+
+        <input
+          value={meetingForm.title}
+          onChange={(event) =>
+            onMeetingFormChange((current) => ({
+              ...current,
+              title: event.target.value,
+            }))
+          }
+          className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
+          placeholder="Meeting heading / topic"
+        />
+
+        <textarea
+          value={meetingForm.description}
+          onChange={(event) =>
+            onMeetingFormChange((current) => ({
+              ...current,
+              description: event.target.value,
+            }))
+          }
+          className="min-h-[100px] w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 outline-none transition focus:border-emerald-300"
+          placeholder="Short meeting note"
+        />
+
+        <div className="grid grid-cols-2 gap-3">
+          <input
+            type="datetime-local"
+            value={meetingForm.startTime}
+            onChange={(event) =>
+              onMeetingFormChange((current) => ({
+                ...current,
+                startTime: event.target.value,
+              }))
+            }
+            className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
+          />
+
+          <input
+            type="datetime-local"
+            value={meetingForm.endTime}
+            onChange={(event) =>
+              onMeetingFormChange((current) => ({
+                ...current,
+                endTime: event.target.value,
+              }))
+            }
+            className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
+          />
+        </div>
+
+        <input
+          value={meetingForm.attendeesText}
+          onChange={(event) =>
+            onMeetingFormChange((current) => ({
+              ...current,
+              attendeesText: event.target.value,
+            }))
+          }
+          className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
+          placeholder="Attendees, separated by commas"
+        />
+
+        <input
+          value={meetingForm.location}
+          onChange={(event) =>
+            onMeetingFormChange((current) => ({
+              ...current,
+              location: event.target.value,
+            }))
+          }
+          className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
+          placeholder="Location optional"
+        />
+
+        <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <span>
+            <span className="block text-sm font-semibold text-slate-950">
+              Google Meet link
+            </span>
+            <span className="block text-xs text-slate-500">
+              Request a Google Meet link when this Calendar event is created.
+            </span>
+          </span>
+
+          <input
+            type="checkbox"
+            checked={meetingForm.createMeetLink}
+            onChange={(event) =>
+              onMeetingFormChange((current) => ({
+                ...current,
+                createMeetLink: event.target.checked,
+              }))
+            }
+            className="h-4 w-4 accent-emerald-700"
+          />
+        </label>
+
+        <div className="flex items-center justify-end gap-3">
+          <button
+            onClick={onClearMeeting}
+            className="inline-flex h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            Clear
+          </button>
+
+          <button
+            onClick={onCreateMeeting}
+            disabled={
+              isCreatingMeeting ||
+              !meetingForm.title.trim() ||
+              !meetingForm.startTime ||
+              !meetingForm.endTime
+            }
+            className="inline-flex h-11 items-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isCreatingMeeting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CalendarPlus className="h-4 w-4" />
+            )}
+            {isCreatingMeeting ? "Creating..." : "Create event"}
+          </button>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+
+          {activeTool === "MOM" && (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-emerald-700" />
+                <h3 className="text-sm font-semibold text-slate-950">
+                  Minutes of meeting
+                </h3>
+              </div>
+
+              <div className="grid gap-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-sm font-semibold text-slate-950">
+                    Short meeting points
+                  </p>
+                  <div className="mt-2 space-y-1 text-sm leading-6 text-slate-600">
+                    <p>• Context comes from the selected email.</p>
+                    <p>
+                      • Main topic: {message.subject || "No subject provided"}.
+                    </p>
+                    <p>• Sender: {message.fromName || message.fromEmail}.</p>
+                    <p>
+                      • Suggested follow-up:{" "}
+                      {analysis?.requiresReply
+                        ? "reply or schedule next step"
+                        : "no urgent reply detected"}
+                      .
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-sm font-semibold text-slate-950">
+                    Action items
+                  </p>
+                  <div className="mt-2 space-y-1 text-sm leading-6 text-slate-600">
+                    {analysis?.nextActions?.length ? (
+                      analysis.nextActions.map((action) => (
+                        <p key={action}>• {action}</p>
+                      ))
+                    ) : (
+                      <>
+                        <p>• Review the email context.</p>
+                        <p>• Decide whether a reply or meeting is needed.</p>
+                        <p>• Attach related documents if required.</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-950">
+                    Last 5 meetings
+                  </h4>
+
+                  {isLoadingMeetings ? (
+                    <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
+                      <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />
+                      Loading meetings...
+                    </div>
+                  ) : recentMeetings.length ? (
+                    <div className="mt-3 grid gap-3">
+                      {recentMeetings.map((meeting, index) => (
+                        <div
+                          key={meeting.id || `${meeting.title}-${index}`}
+                          className="rounded-xl border border-slate-200 bg-white p-4"
+                        >
+                          <p className="text-sm font-semibold text-slate-950">
+                            {meeting.title}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {formatDateTime(meeting.startTime)} -{" "}
+                            {formatDateTime(meeting.endTime)}
+                          </p>
+
+                          {meeting.description && (
+                            <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-600">
+                              {meeting.description}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500">
+                      No recent meetings found. Sync Calendar first, then click
+                      MoM again.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTool === "DOCUMENTS" && (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <FolderOpen className="h-4 w-4 text-emerald-700" />
+                <h3 className="text-sm font-semibold text-slate-950">
+                  Related documents
+                </h3>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <p className="text-sm leading-6 text-slate-600">
+                  No document store is connected yet. For now, pulse suggests
+                  the documents that should be attached to this email or
+                  meeting.
+                </p>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <InfoBox
+                  label="Email"
+                  value={message.subject || "(No subject)"}
+                />
+                <InfoBox label="Sender" value={getSenderName(message)} />
+                <InfoBox
+                  label="Suggested folder"
+                  value="Email / Meeting context"
+                />
+              </div>
+
+              <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/50 p-4">
+                <p className="text-sm font-semibold text-slate-950">
+                  Suggested documents
+                </p>
+                <div className="mt-2 space-y-1 text-sm leading-6 text-slate-600">
+                  <p>• Meeting agenda</p>
+                  <p>• Reply draft or follow-up note</p>
+                  <p>• Sender-shared files</p>
+                  <p>• Screenshots or references</p>
+                  <p>• Minutes of meeting after discussion</p>
+                </div>
+              </div>
             </div>
           )}
         </div>
-
-        <div
-          className={`${isHeaderCompact ? "mt-3" : "mt-5"} flex flex-wrap gap-3`}
-        >
-          <ActionButton
-            icon={Sparkles}
-            label="Summarize"
-            active={activeTool === "SUMMARY"}
-            onClick={runSummarize}
-          />
-          <ActionButton
-            icon={Wand2}
-            label="Reply"
-            active={activeTool === "REPLY"}
-            onClick={runReply}
-          />
-          <ActionButton
-            icon={CalendarPlus}
-            label="Meeting"
-            active={activeTool === "MEETING"}
-            onClick={runMeeting}
-          />
-          <ActionButton
-            icon={ClipboardList}
-            label="MoM"
-            active={activeTool === "MOM"}
-            onClick={runMom}
-          />
-          <ActionButton
-            icon={FolderOpen}
-            label="Documents"
-            active={activeTool === "DOCUMENTS"}
-            onClick={runDocuments}
-          />
-        </div>
       </div>
+    </section>
+  );
+}
 
-      <div
-        onScroll={(event) => {
-          setIsHeaderCompact(event.currentTarget.scrollTop > 80);
-        }}
-        className="min-h-0 flex-1 overflow-y-auto px-6 py-5"
-      >
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5">
-          <div className="space-y-4 text-[15px] leading-7 text-slate-700">
+function GmailMessageBody({ message }: { message: InboxMessage }) {
+  const hasHtml = Boolean(message.bodyHtml?.trim());
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      {hasHtml ? (
+        <div className="bg-[#f1f3f4]">
+          <EmailHtmlFrame html={message.bodyHtml || ""} />
+        </div>
+      ) : (
+        <div className="p-5">
+          <div className="max-w-4xl space-y-3 text-[14px] leading-6 text-slate-800">
             {getReadableBody(message)
               .split(/\n{2,}/)
               .map((paragraph, index) => (
@@ -1379,445 +1997,57 @@ ${selectedEmailContext()}
               ))}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
 
-        {!activeTool && (
-          <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm leading-6 text-slate-500">
-            Choose Summarize, Reply, Meeting, MoM, or Documents to generate a
-            detailed action panel for this email.
-          </div>
-        )}
+function EmailHtmlFrame({ html }: { html: string }) {
+  const [height, setHeight] = useState(680);
+  const srcDoc = useMemo(() => buildEmailSrcDoc(html), [html]);
 
-        {activeTool === "SUMMARY" && (
-          <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-emerald-700" />
-              <h3 className="text-sm font-semibold text-slate-950">
-                Detailed email summary
-              </h3>
-            </div>
+  return (
+    <iframe
+      title="Email content"
+      srcDoc={srcDoc}
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      onLoad={(event) => {
+        try {
+          const frame = event.currentTarget;
+          const doc = frame.contentDocument;
+          const bodyHeight = doc?.body?.scrollHeight || 0;
+          const htmlHeight = doc?.documentElement?.scrollHeight || 0;
+          const nextHeight = Math.max(bodyHeight, htmlHeight, 360);
 
-            <p className="text-sm leading-6 text-slate-700">
-              {analysis?.summary ||
-                "pulse AI is analyzing this email. Try again in a moment."}
-            </p>
+          setHeight(Math.min(nextHeight + 24, 3200));
+        } catch {
+          setHeight(680);
+        }
+      }}
+      className="block w-full border-0 bg-transparent"
+      style={{ height }}
+    />
+  );
+}
 
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <InfoBox
-                label="Intent"
-                value={analysis?.intent?.replace(/_/g, " ") || "Analyzing"}
-              />
-              <InfoBox
-                label="Priority"
-                value={analysis?.priority || "Analyzing"}
-              />
-              <InfoBox
-                label="Reply needed"
-                value={analysis?.requiresReply ? "Yes" : "No"}
-              />
-            </div>
-
-            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Next actions
-              </p>
-
-              <div className="mt-2 space-y-2">
-                {analysis?.nextActions?.length ? (
-                  analysis.nextActions.map((action) => (
-                    <p key={action} className="text-sm text-slate-700">
-                      • {action}
-                    </p>
-                  ))
-                ) : (
-                  <p className="text-sm text-slate-500">
-                    No next actions detected.
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTool === "REPLY" && (
-          <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/30 p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <CornerUpLeft className="h-4 w-4 text-emerald-700" />
-                <h3 className="text-sm font-semibold text-slate-950">
-                  Reply draft
-                </h3>
-              </div>
-
-              {isGeneratingReply && (
-                <div className="inline-flex items-center gap-2 text-xs text-slate-500">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
-                  Generating
-                </div>
-              )}
-            </div>
-
-            <div className="mb-4 flex flex-wrap gap-2">
-              {REPLY_TONES.map((tone) => (
-                <button
-                  key={tone}
-                  onClick={() => {
-                    setReplyTone(tone);
-                    void generateReplyDraft(tone);
-                  }}
-                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
-                    replyTone === tone
-                      ? "bg-emerald-700 text-white"
-                      : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-emerald-50 hover:text-emerald-800"
-                  }`}
-                >
-                  {tone}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid gap-4">
-              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                To: {message.fromEmail}
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                Subject:{" "}
-                {message.subject.startsWith("Re:")
-                  ? message.subject
-                  : `Re: ${message.subject}`}
-              </div>
-
-              <textarea
-                value={replyDraft}
-                onChange={(event) => onReplyDraftChange(event.target.value)}
-                className="min-h-[220px] w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-emerald-300"
-                placeholder="Generated reply will appear here..."
-              />
-
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-slate-500">
-                  pulse prepares the draft. You approve before sending.
-                </p>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={onClearReply}
-                    className="inline-flex h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Clear
-                  </button>
-
-                  <button
-                    onClick={onSendReply}
-                    disabled={isSendingReply || !replyDraft.trim()}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isSendingReply ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                    {isSendingReply ? "Sending..." : "Send reply"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTool === "MEETING" && (
-          <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/30 p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <CalendarPlus className="h-4 w-4 text-emerald-700" />
-              <h3 className="text-sm font-semibold text-slate-950">
-                Schedule meeting
-              </h3>
-            </div>
-
-            <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
-              Add title, date, time, attendees, agenda, location, and Google
-              Meet link. pulse creates the Calendar event only after approval.
-            </div>
-
-            <div className="grid gap-4">
-              <InfoBox
-                label="Detected sender"
-                value={message.fromName || message.fromEmail}
-              />
-              <InfoBox
-                label="Meeting request"
-                value={
-                  analysis?.hasMeetingRequest
-                    ? "Detected"
-                    : "Not clearly detected"
-                }
-              />
-
-              <input
-                value={meetingForm.title}
-                onChange={(event) =>
-                  onMeetingFormChange((current) => ({
-                    ...current,
-                    title: event.target.value,
-                  }))
-                }
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
-                placeholder="Meeting title"
-              />
-
-              <textarea
-                value={meetingForm.description}
-                onChange={(event) =>
-                  onMeetingFormChange((current) => ({
-                    ...current,
-                    description: event.target.value,
-                  }))
-                }
-                className="min-h-[110px] w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 outline-none transition focus:border-emerald-300"
-                placeholder="Agenda / description"
-              />
-
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="datetime-local"
-                  value={meetingForm.startTime}
-                  onChange={(event) =>
-                    onMeetingFormChange((current) => ({
-                      ...current,
-                      startTime: event.target.value,
-                    }))
-                  }
-                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
-                />
-
-                <input
-                  type="datetime-local"
-                  value={meetingForm.endTime}
-                  onChange={(event) =>
-                    onMeetingFormChange((current) => ({
-                      ...current,
-                      endTime: event.target.value,
-                    }))
-                  }
-                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
-                />
-              </div>
-
-              <input
-                value={meetingForm.attendeesText}
-                onChange={(event) =>
-                  onMeetingFormChange((current) => ({
-                    ...current,
-                    attendeesText: event.target.value,
-                  }))
-                }
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
-                placeholder="Attendees, separated by commas"
-              />
-
-              <input
-                value={meetingForm.location}
-                onChange={(event) =>
-                  onMeetingFormChange((current) => ({
-                    ...current,
-                    location: event.target.value,
-                  }))
-                }
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-emerald-300"
-                placeholder="Location optional"
-              />
-
-              <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3">
-                <span>
-                  <span className="block text-sm font-semibold text-slate-950">
-                    Create Google Meet link
-                  </span>
-                  <span className="block text-xs text-slate-500">
-                    A Meet link will be requested when the Calendar event is
-                    created.
-                  </span>
-                </span>
-
-                <input
-                  type="checkbox"
-                  checked={meetingForm.createMeetLink}
-                  onChange={(event) =>
-                    onMeetingFormChange((current) => ({
-                      ...current,
-                      createMeetLink: event.target.checked,
-                    }))
-                  }
-                  className="h-4 w-4 accent-emerald-700"
-                />
-              </label>
-
-              <div className="flex items-center justify-end gap-3">
-                <button
-                  onClick={onClearMeeting}
-                  className="inline-flex h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                >
-                  Clear
-                </button>
-
-                <button
-                  onClick={onCreateMeeting}
-                  disabled={
-                    isCreatingMeeting ||
-                    !meetingForm.title.trim() ||
-                    !meetingForm.startTime ||
-                    !meetingForm.endTime
-                  }
-                  className="inline-flex h-11 items-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isCreatingMeeting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <CalendarPlus className="h-4 w-4" />
-                  )}
-                  {isCreatingMeeting ? "Creating..." : "Create event"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTool === "MOM" && (
-          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <ClipboardList className="h-4 w-4 text-emerald-700" />
-              <h3 className="text-sm font-semibold text-slate-950">
-                Minutes of meeting
-              </h3>
-            </div>
-
-            <div className="grid gap-4">
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
-                <p className="text-sm font-semibold text-slate-950">
-                  Short meeting points
-                </p>
-                <div className="mt-2 space-y-1 text-sm leading-6 text-slate-600">
-                  <p>• Context comes from the selected email.</p>
-                  <p>
-                    • Main topic: {message.subject || "No subject provided"}.
-                  </p>
-                  <p>• Sender: {message.fromName || message.fromEmail}.</p>
-                  <p>
-                    • Suggested follow-up:{" "}
-                    {analysis?.requiresReply
-                      ? "reply or schedule next step"
-                      : "no urgent reply detected"}
-                    .
-                  </p>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white p-4">
-                <p className="text-sm font-semibold text-slate-950">
-                  Action items
-                </p>
-                <div className="mt-2 space-y-1 text-sm leading-6 text-slate-600">
-                  {analysis?.nextActions?.length ? (
-                    analysis.nextActions.map((action) => (
-                      <p key={action}>• {action}</p>
-                    ))
-                  ) : (
-                    <>
-                      <p>• Review the email context.</p>
-                      <p>• Decide whether a reply or meeting is needed.</p>
-                      <p>• Attach related documents if required.</p>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <h4 className="text-sm font-semibold text-slate-950">
-                  Last 5 meetings
-                </h4>
-
-                {isLoadingMeetings ? (
-                  <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
-                    <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />
-                    Loading meetings...
-                  </div>
-                ) : recentMeetings.length ? (
-                  <div className="mt-3 grid gap-3">
-                    {recentMeetings.map((meeting, index) => (
-                      <div
-                        key={meeting.id || `${meeting.title}-${index}`}
-                        className="rounded-xl border border-slate-200 bg-white p-4"
-                      >
-                        <p className="text-sm font-semibold text-slate-950">
-                          {meeting.title}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {formatDateTime(meeting.startTime)} -{" "}
-                          {formatDateTime(meeting.endTime)}
-                        </p>
-
-                        {meeting.description && (
-                          <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-600">
-                            {meeting.description}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-slate-500">
-                    No recent meetings found. Sync Calendar first, then click
-                    MoM again.
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTool === "DOCUMENTS" && (
-          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <FolderOpen className="h-4 w-4 text-emerald-700" />
-              <h3 className="text-sm font-semibold text-slate-950">
-                Related documents
-              </h3>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-sm leading-6 text-slate-600">
-                No document store is connected yet. For now, pulse suggests the
-                documents that should be attached to this email or meeting.
-              </p>
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <InfoBox
-                label="Email"
-                value={message.subject || "(No subject)"}
-              />
-              <InfoBox label="Sender" value={getSenderName(message)} />
-              <InfoBox
-                label="Suggested folder"
-                value="Email / Meeting context"
-              />
-            </div>
-
-            <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/50 p-4">
-              <p className="text-sm font-semibold text-slate-950">
-                Suggested documents
-              </p>
-              <div className="mt-2 space-y-1 text-sm leading-6 text-slate-600">
-                <p>• Meeting agenda</p>
-                <p>• Reply draft or follow-up note</p>
-                <p>• Sender-shared files</p>
-                <p>• Screenshots or references</p>
-                <p>• Minutes of meeting after discussion</p>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </section>
+function GmailIconButton({
+  children,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className="flex h-9 w-9 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -1835,13 +2065,13 @@ function ActionButton({
   return (
     <button
       onClick={onClick}
-      className={`inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-sm font-medium shadow-sm transition ${
+      className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-semibold shadow-sm transition ${
         active
           ? "border-emerald-200 bg-emerald-50 text-emerald-800"
           : "border-slate-200 bg-white text-slate-700 hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800"
       }`}
     >
-      <Icon className="h-4 w-4" />
+      <Icon className="h-3.5 w-3.5" />
       {label}
     </button>
   );

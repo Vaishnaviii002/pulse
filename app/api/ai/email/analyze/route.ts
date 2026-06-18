@@ -182,6 +182,7 @@ Very important rules:
 - Do not generate filler replies.
 - Do not say "I will get back to you" unless the email actually asks for something that needs follow-up.
 - Do not reply to LinkedIn notification emails through Gmail.
+- Write the summary in simple English. It should clearly explain what the email is about and what the user should understand from it.
 - Do not reply to no-reply, notification, newsletter, or marketing senders.
 - If no reply is needed, set requiresReply=false and suggestedReply="".
 - A good reply should directly answer the sender's message.
@@ -189,6 +190,11 @@ Very important rules:
 - Never include placeholders like [Name], [Date], [Time], or "your project" unless those exact details are unknown and necessary.
 - If the email asks for a meeting but does not provide a time, suggest asking for a suitable time.
 - If the email proposes a meeting with clear details, confirm politely.
+- For meeting detection, only set hasMeetingRequest=true and meeting.shouldCreate=true when the email clearly asks to schedule, join, confirm, or discuss a meeting/call/interview.
+- If the email is promotional, security notification, newsletter, password reset, OTP, receipt, update, or FYI, set hasMeetingRequest=false and meeting.shouldCreate=false.
+- Meeting title should describe the real topic of the meeting, not generic text.
+- Meeting attendees should include real email addresses or names found in the email.
+- If date or time is missing, keep dateText/timeText empty and let the user choose manually.
 - Keep suggested replies short, human, and ready to send.
           `.trim(),
         },
@@ -220,7 +226,7 @@ Very important rules:
               summary: {
                 type: "string",
                 description:
-                  "A concise product-style summary of what the email means.",
+  "A simple-English summary explaining what the email is about. Avoid technical labels. Keep it clear and useful for the user.",
               },
               intent: {
                 type: "string",

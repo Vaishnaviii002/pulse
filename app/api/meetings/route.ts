@@ -12,12 +12,19 @@ function normalizeAttendees(value: unknown): string[] {
     return value
       .map((item) => {
         if (typeof item === "string") return item;
+
         if (item && typeof item === "object") {
-          const record = item as { email?: unknown; displayName?: unknown };
+          const record = item as {
+            email?: unknown;
+            displayName?: unknown;
+          };
+
           return String(record.email || record.displayName || "");
         }
+
         return "";
       })
+      .map((item) => item.trim())
       .filter(Boolean);
   }
 
@@ -76,11 +83,13 @@ function getAttendees(event: unknown) {
     metadata?: unknown;
   };
 
-  return (
-    normalizeAttendees(item.attendees).length
-      ? normalizeAttendees(item.attendees)
-      : normalizeAttendees(getMetadataValue(item.metadata, "attendees"))
-  );
+  const directAttendees = normalizeAttendees(item.attendees);
+
+  if (directAttendees.length) {
+    return directAttendees;
+  }
+
+  return normalizeAttendees(getMetadataValue(item.metadata, "attendees"));
 }
 
 function calculateReadiness(event: {
@@ -115,7 +124,7 @@ function calculateReadiness(event: {
   if (score >= 80) {
     return {
       score,
-      label: "Ready",
+      label: "Ready" as const,
       missing,
     };
   }
@@ -123,14 +132,14 @@ function calculateReadiness(event: {
   if (score >= 50) {
     return {
       score,
-      label: "Needs preparation",
+      label: "Needs preparation" as const,
       missing,
     };
   }
 
   return {
     score,
-    label: "Not ready",
+    label: "Not ready" as const,
     missing,
   };
 }
@@ -271,6 +280,7 @@ export async function GET() {
 
     const meetings = events.map((event) => {
       const sourceEmailId = getSourceEmailId(event);
+
       const sourceEmail = sourceEmailId
         ? sourceEmailMap.get(sourceEmailId)
         : null;
@@ -304,6 +314,7 @@ export async function GET() {
               subject: sourceEmail.subject || "(No subject)",
               fromName: sourceEmail.fromName || "",
               fromEmail: sourceEmail.fromEmail,
+              toEmails: sourceEmail.toEmails || [],
               snippet: sourceEmail.snippet || "",
               bodyText: sourceEmail.bodyText || "",
               receivedAt: sourceEmail.receivedAt,
@@ -334,9 +345,7 @@ export async function GET() {
       {
         success: false,
         error:
-          error instanceof Error
-            ? error.message
-            : "Failed to load meetings.",
+          error instanceof Error ? error.message : "Failed to load meetings.",
       },
       { status: 500 }
     );

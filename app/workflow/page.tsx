@@ -10,7 +10,6 @@ import {
   CircleAlert,
   ClipboardList,
   Clock,
-  FileText,
   Inbox,
   Loader2,
   Mail,

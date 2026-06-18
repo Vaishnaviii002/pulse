@@ -73,7 +73,7 @@ function AppSidebar() {
         className="mb-6 flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800"
       >
         <CalendarPlus className="h-4 w-4" />
-        New Meeting
+        Welcome
       </Link>
 
       <nav className="space-y-1">
