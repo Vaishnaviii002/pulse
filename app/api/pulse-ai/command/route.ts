@@ -6,6 +6,57 @@ import { getOpenAIClient, OPENAI_MODEL } from "@/lib/openai";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type EmailRecord = {
+  id: string;
+  subject: string | null;
+  snippet: string | null;
+  bodyText: string | null;
+  bodyHtml: string | null;
+  fromName: string | null;
+  fromEmail: string | null;
+  toEmails: string[];
+  ccEmails: string[];
+  receivedAt: Date | null;
+  sentAt: Date | null;
+  thread?: {
+    subject?: string | null;
+  } | null;
+};
+
+type CalendarEventRecord = {
+  id: string;
+  title: string;
+  description: string | null;
+  location: string | null;
+  startTime: Date;
+  endTime: Date;
+  status: string | null;
+  source: string | null;
+};
+
+type WorkflowRecord = {
+  id: string;
+  title: string;
+  type: string;
+  status: string;
+  summary: string | null;
+  nextStep: string | null;
+  updatedAt: Date;
+};
+
+type AuditRecord = {
+  id: string;
+  event: string;
+  entityType: string | null;
+  entityId: string | null;
+  createdAt: Date;
+};
+
+type ScoredEmail = {
+  email: EmailRecord;
+  score: number;
+};
+
 function stripHtml(html: string) {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -114,6 +165,7 @@ function extractPossibleSender(command: string) {
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
+
     if (match?.[1]) {
       return match[1].trim().toLowerCase();
     }
@@ -158,24 +210,12 @@ function getSearchTerms(command: string, possibleSender: string) {
 
   return normalizeSearchValue(source)
     .split(" ")
-    .map((word) => word.trim())
-    .filter((word) => word.length >= 3)
-    .filter((word) => !stopWords.has(word));
+    .map((word: string) => word.trim())
+    .filter((word: string) => word.length >= 3)
+    .filter((word: string) => !stopWords.has(word));
 }
 
-function emailSearchText(email: {
-  subject: string;
-  snippet: string | null;
-  bodyText: string | null;
-  bodyHtml: string | null;
-  fromName: string | null;
-  fromEmail: string;
-  toEmails: string[];
-  ccEmails: string[];
-  thread?: {
-    subject?: string | null;
-  } | null;
-}) {
+function emailSearchText(email: EmailRecord) {
   return normalizeSearchValue(
     [
       email.fromName || "",
@@ -196,19 +236,7 @@ function findRelevantEmails({
   command,
   possibleSender,
 }: {
-  emails: Array<{
-    subject: string;
-    snippet: string | null;
-    bodyText: string | null;
-    bodyHtml: string | null;
-    fromName: string | null;
-    fromEmail: string;
-    toEmails: string[];
-    ccEmails: string[];
-    thread?: {
-      subject?: string | null;
-    } | null;
-  }>;
+  emails: EmailRecord[];
   command: string;
   possibleSender: string;
 }) {
@@ -217,10 +245,10 @@ function findRelevantEmails({
   if (!terms.length) return emails;
 
   return emails
-    .map((email) => {
+    .map((email: EmailRecord): ScoredEmail => {
       const text = emailSearchText(email);
 
-      const score = terms.reduce((total, term) => {
+      const score = terms.reduce((total: number, term: string) => {
         return text.includes(term) ? total + 1 : total;
       }, 0);
 
@@ -229,9 +257,9 @@ function findRelevantEmails({
         score,
       };
     })
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map((item) => item.email);
+    .filter((item: ScoredEmail) => item.score > 0)
+    .sort((a: ScoredEmail, b: ScoredEmail) => b.score - a.score)
+    .map((item: ScoredEmail) => item.email);
 }
 
 function isTodayCommand(command: string) {
@@ -291,7 +319,7 @@ export async function POST(request: NextRequest) {
 
     const possibleSender = extractPossibleSender(command);
 
-    const emails = await prisma.emailMessage.findMany({
+    const emails = (await prisma.emailMessage.findMany({
       where: {
         userId: appUser.id,
       },
@@ -307,7 +335,7 @@ export async function POST(request: NextRequest) {
       include: {
         thread: true,
       },
-    });
+    })) as EmailRecord[];
 
     const matchedEmails = findRelevantEmails({
       emails,
@@ -317,7 +345,7 @@ export async function POST(request: NextRequest) {
 
     const relevantEmails = matchedEmails.length ? matchedEmails : emails;
 
-    const todayEvents = await prisma.calendarEvent.findMany({
+    const todayEvents = (await prisma.calendarEvent.findMany({
       where: {
         userId: appUser.id,
         startTime: {
@@ -329,9 +357,9 @@ export async function POST(request: NextRequest) {
         startTime: "asc",
       },
       take: 20,
-    });
+    })) as CalendarEventRecord[];
 
-    const upcomingEvents = await prisma.calendarEvent.findMany({
+    const upcomingEvents = (await prisma.calendarEvent.findMany({
       where: {
         userId: appUser.id,
         startTime: {
@@ -342,9 +370,9 @@ export async function POST(request: NextRequest) {
         startTime: "asc",
       },
       take: 20,
-    });
+    })) as CalendarEventRecord[];
 
-    const recentEvents = await prisma.calendarEvent.findMany({
+    const recentEvents = (await prisma.calendarEvent.findMany({
       where: {
         userId: appUser.id,
       },
@@ -352,9 +380,9 @@ export async function POST(request: NextRequest) {
         startTime: "desc",
       },
       take: 20,
-    });
+    })) as CalendarEventRecord[];
 
-    const workflows = await prisma.workflow.findMany({
+    const workflows = (await prisma.workflow.findMany({
       where: {
         userId: appUser.id,
       },
@@ -362,9 +390,9 @@ export async function POST(request: NextRequest) {
         updatedAt: "desc",
       },
       take: 20,
-    });
+    })) as WorkflowRecord[];
 
-    const audits = await prisma.auditLog.findMany({
+    const audits = (await prisma.auditLog.findMany({
       where: {
         userId: appUser.id,
       },
@@ -372,28 +400,35 @@ export async function POST(request: NextRequest) {
         createdAt: "desc",
       },
       take: 20,
-    });
+    })) as AuditRecord[];
 
-    const emailContext = relevantEmails.slice(0, 12).map((email, index) => {
-      const body = getEmailBody(email);
-      const fullText = `${email.subject} ${body}`;
-      const priority = inferPriority(fullText);
-      const replyNeeded = looksLikeReplyNeeded(fullText, email.fromEmail);
+    const emailContext = relevantEmails
+      .slice(0, 12)
+      .map((email: EmailRecord, index: number) => {
+        const emailBody = getEmailBody(email);
+        const fullText = `${email.subject || ""} ${emailBody}`;
+        const priority = inferPriority(fullText);
+        const replyNeeded = looksLikeReplyNeeded(
+          fullText,
+          email.fromEmail || "",
+        );
 
-      return {
-        index: index + 1,
-        id: email.id,
-        subject: email.subject || "(No subject)",
-        from: `${email.fromName || "Unknown"} <${email.fromEmail}>`,
-        receivedAt: formatDateTime(email.receivedAt),
-        priority,
-        replyNeeded,
-        preview: body.slice(0, 1200),
-      };
-    });
+        return {
+          index: index + 1,
+          id: email.id,
+          subject: email.subject || "(No subject)",
+          from: `${email.fromName || "Unknown"} <${
+            email.fromEmail || "unknown"
+          }>`,
+          receivedAt: formatDateTime(email.receivedAt),
+          priority,
+          replyNeeded,
+          preview: emailBody.slice(0, 1200),
+        };
+      });
 
     const calendarContext = {
-      today: todayEvents.map((event) => ({
+      today: todayEvents.map((event: CalendarEventRecord) => ({
         title: event.title,
         start: formatTime(event.startTime),
         end: formatTime(event.endTime),
@@ -403,16 +438,18 @@ export async function POST(request: NextRequest) {
         status: event.status || "",
         source: event.source || "",
       })),
-      upcoming: upcomingEvents.slice(0, 10).map((event) => ({
-        title: event.title,
-        start: formatDateTime(event.startTime),
-        end: formatDateTime(event.endTime),
-        location: event.location || "",
-        description: event.description || "",
-        status: event.status || "",
-        source: event.source || "",
-      })),
-      recent: recentEvents.slice(0, 10).map((event) => ({
+      upcoming: upcomingEvents
+        .slice(0, 10)
+        .map((event: CalendarEventRecord) => ({
+          title: event.title,
+          start: formatDateTime(event.startTime),
+          end: formatDateTime(event.endTime),
+          location: event.location || "",
+          description: event.description || "",
+          status: event.status || "",
+          source: event.source || "",
+        })),
+      recent: recentEvents.slice(0, 10).map((event: CalendarEventRecord) => ({
         title: event.title,
         start: formatDateTime(event.startTime),
         end: formatDateTime(event.endTime),
@@ -423,16 +460,18 @@ export async function POST(request: NextRequest) {
       })),
     };
 
-    const workflowContext = workflows.slice(0, 10).map((workflow) => ({
-      title: workflow.title,
-      type: workflow.type,
-      status: workflow.status,
-      summary: workflow.summary || "",
-      nextStep: workflow.nextStep || "",
-      updatedAt: formatDateTime(workflow.updatedAt),
-    }));
+    const workflowContext = workflows
+      .slice(0, 10)
+      .map((workflow: WorkflowRecord) => ({
+        title: workflow.title,
+        type: workflow.type,
+        status: workflow.status,
+        summary: workflow.summary || "",
+        nextStep: workflow.nextStep || "",
+        updatedAt: formatDateTime(workflow.updatedAt),
+      }));
 
-    const auditContext = audits.slice(0, 10).map((audit) => ({
+    const auditContext = audits.slice(0, 10).map((audit: AuditRecord) => ({
       event: audit.event,
       entityType: audit.entityType || "",
       entityId: audit.entityId || "",
@@ -474,8 +513,8 @@ Important behavior:
 - Use friendly, simple language.
 - Use bullets when it improves readability.
 - The product name is "pulse AI".
--If the user asks to schedule, create, or book a meeting, do not say the meeting was created. Explain that pulse AI can prepare a meeting draft and the user must approve it before it is added to Google Calendar.
--If selected email context is provided, use it as the source of truth for meeting suggestions, replies, summaries, and documents.
+- If the user asks to schedule, create, or book a meeting, do not say the meeting was created. Explain that pulse AI can prepare a meeting draft and the user must approve it before it is added to Google Calendar.
+- If selected email context is provided, use it as the source of truth for meeting suggestions, replies, summaries, and documents.
           `.trim(),
         },
         {
