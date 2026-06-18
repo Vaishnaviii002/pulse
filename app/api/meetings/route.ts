@@ -5,12 +5,58 @@ import { prisma } from "@/lib/prisma";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type SourceEmail = {
+  id: string;
+  subject?: string | null;
+  fromName?: string | null;
+  fromEmail?: string | null;
+  toEmails?: string[] | null;
+  snippet?: string | null;
+  bodyText?: string | null;
+  receivedAt?: Date | null;
+  thread?: {
+    subject?: string | null;
+  } | null;
+};
+
+type MeetingItem = {
+  id: string;
+  title: string;
+  description: string;
+  location: string;
+  startTime: Date;
+  endTime: Date;
+  status: string;
+  source: string;
+  meetingUrl: string;
+  attendees: string[];
+  sourceEmailId: string | null;
+  readiness: {
+    score: number;
+    label: "Ready" | "Needs preparation" | "Not ready";
+    missing: string[];
+  };
+  sourceEmail: {
+    id: string;
+    subject: string;
+    fromName: string;
+    fromEmail?: string | null;
+    toEmails: string[];
+    snippet: string;
+    bodyText: string;
+    receivedAt?: Date | null;
+    threadSubject: string;
+  } | null;
+  workflows: any[];
+  auditLogs: any[];
+};
+
 function normalizeAttendees(value: unknown): string[] {
   if (!value) return [];
 
   if (Array.isArray(value)) {
     return value
-      .map((item) => {
+      .map((item: unknown) => {
         if (typeof item === "string") return item;
 
         if (item && typeof item === "object") {
@@ -24,21 +70,21 @@ function normalizeAttendees(value: unknown): string[] {
 
         return "";
       })
-      .map((item) => item.trim())
+      .map((item: string) => item.trim())
       .filter(Boolean);
   }
 
   if (typeof value === "string") {
     return value
       .split(",")
-      .map((item) => item.trim())
+      .map((item: string) => item.trim())
       .filter(Boolean);
   }
 
   return [];
 }
 
-function getMetadataValue(metadata: unknown, key: string) {
+function getMetadataValue(metadata: unknown, key: string): unknown | null {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     return null;
   }
@@ -46,7 +92,7 @@ function getMetadataValue(metadata: unknown, key: string) {
   return (metadata as Record<string, unknown>)[key] || null;
 }
 
-function getMeetingUrl(event: unknown) {
+function getMeetingUrl(event: unknown): string {
   const item = event as {
     meetingUrl?: string | null;
     hangoutLink?: string | null;
@@ -62,7 +108,7 @@ function getMeetingUrl(event: unknown) {
   );
 }
 
-function getSourceEmailId(event: unknown) {
+function getSourceEmailId(event: unknown): string | null {
   const item = event as {
     sourceEmailId?: string | null;
     emailMessageId?: string | null;
@@ -77,7 +123,7 @@ function getSourceEmailId(event: unknown) {
   );
 }
 
-function getAttendees(event: unknown) {
+function getAttendees(event: unknown): string[] {
   const item = event as {
     attendees?: unknown;
     metadata?: unknown;
@@ -190,12 +236,14 @@ export async function GET() {
       new Set(
         events
           .map((event: any) => getSourceEmailId(event))
-          .filter((id: string | null | undefined): id is string => Boolean(id)),
+          .filter((id: string | null | undefined): id is string =>
+            Boolean(id),
+          ),
       ),
     );
 
-    const sourceEmails = sourceEmailIds.length
-      ? await prisma.emailMessage.findMany({
+    const sourceEmails: SourceEmail[] = sourceEmailIds.length
+      ? ((await prisma.emailMessage.findMany({
           where: {
             id: {
               in: sourceEmailIds,
@@ -205,11 +253,11 @@ export async function GET() {
           include: {
             thread: true,
           },
-        })
+        })) as SourceEmail[])
       : [];
 
-    const sourceEmailMap = new Map(
-      sourceEmails.map((email: any) => [email.id, email]),
+    const sourceEmailMap = new Map<string, SourceEmail>(
+      sourceEmails.map((email: SourceEmail) => [email.id, email]),
     );
 
     let workflows: any[] = [];
@@ -278,11 +326,11 @@ export async function GET() {
       auditMap.set(key, current);
     }
 
-    const meetings = events.map((event: any) => {
+    const meetings: MeetingItem[] = events.map((event: any) => {
       const sourceEmailId = getSourceEmailId(event);
 
-      const sourceEmail = sourceEmailId
-        ? sourceEmailMap.get(sourceEmailId)
+      const sourceEmail: SourceEmail | null = sourceEmailId
+        ? sourceEmailMap.get(sourceEmailId) || null
         : null;
 
       const attendees = getAttendees(event);
@@ -331,11 +379,13 @@ export async function GET() {
       meetings,
       stats: {
         total: meetings.length,
-        fromEmail: meetings.filter((meeting) => meeting.sourceEmailId).length,
+        fromEmail: meetings.filter((meeting: MeetingItem) => meeting.sourceEmailId)
+          .length,
         needsPrep: meetings.filter(
-          (meeting) => meeting.readiness.label !== "Ready",
+          (meeting: MeetingItem) => meeting.readiness.label !== "Ready",
         ).length,
-        withMeetLink: meetings.filter((meeting) => meeting.meetingUrl).length,
+        withMeetLink: meetings.filter((meeting: MeetingItem) => meeting.meetingUrl)
+          .length,
       },
     });
   } catch (error) {
