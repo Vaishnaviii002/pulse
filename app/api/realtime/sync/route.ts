@@ -8,6 +8,20 @@ import { extractTasksFromRecentEmails } from "@/lib/task-extraction";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type ConnectedAccountItem = {
+  id: string;
+  provider: string;
+  status: string;
+  userId: string;
+};
+
+type SyncResult = {
+  gmail?: unknown;
+  calendar?: unknown;
+  tasks?: unknown;
+  errors: string[];
+};
+
 export async function POST() {
   try {
     const clerkUser = await currentUser();
@@ -18,7 +32,7 @@ export async function POST() {
           success: false,
           error: "Unauthorized. Please sign in again.",
         },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -34,54 +48,51 @@ export async function POST() {
           success: false,
           error: "User not synced in database.",
         },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    const accounts = await prisma.connectedAccount.findMany({
+    const accounts = (await prisma.connectedAccount.findMany({
       where: {
         userId: appUser.id,
         status: "CONNECTED",
       },
-    });
+    })) as ConnectedAccountItem[];
 
     const hasGmail = accounts.some(
-      (account) => account.provider === "CORSAIR_GMAIL"
+      (account: ConnectedAccountItem) =>
+        account.provider === "CORSAIR_GMAIL",
     );
 
     const hasCalendar = accounts.some(
-      (account) =>
+      (account: ConnectedAccountItem) =>
         account.provider === "CORSAIR_CALENDAR" ||
-        account.provider === "GOOGLE_CALENDAR"
+        account.provider === "GOOGLE_CALENDAR",
     );
 
-    const result: {
-      gmail?: unknown;
-      calendar?: unknown;
-      errors: string[];
-    } = {
+    const result: SyncResult = {
       errors: [],
     };
 
     if (hasGmail) {
-  try {
-    result.gmail = await syncLatestGmailForUser({
-      clerkUserId: clerkUser.id,
-      appUserId: appUser.id,
-    });
+      try {
+        result.gmail = await syncLatestGmailForUser({
+          clerkUserId: clerkUser.id,
+          appUserId: appUser.id,
+        });
 
-    result.tasks = await extractTasksFromRecentEmails({
-      appUserId: appUser.id,
-      limit: 40,
-    });
-  } catch (error) {
-    result.errors.push(
-      error instanceof Error
-        ? `Gmail/Tasks: ${error.message}`
-        : "Gmail sync or task extraction failed."
-    );
-  }
-}
+        result.tasks = await extractTasksFromRecentEmails({
+          appUserId: appUser.id,
+          limit: 40,
+        });
+      } catch (error) {
+        result.errors.push(
+          error instanceof Error
+            ? `Gmail/Tasks: ${error.message}`
+            : "Gmail sync or task extraction failed.",
+        );
+      }
+    }
 
     if (hasCalendar) {
       try {
@@ -95,7 +106,7 @@ export async function POST() {
         result.errors.push(
           error instanceof Error
             ? `Calendar: ${error.message}`
-            : "Calendar sync failed."
+            : "Calendar sync failed.",
         );
       }
     }
@@ -118,7 +129,7 @@ export async function POST() {
             ? error.message
             : "Automatic pulse sync failed.",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
