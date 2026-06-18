@@ -126,7 +126,7 @@ export async function GET() {
     if (!clerkUser) {
       return NextResponse.json(
         { success: false, error: "Unauthorized" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -139,7 +139,7 @@ export async function GET() {
     if (!appUser) {
       return NextResponse.json(
         { success: false, error: "User not synced in database." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -159,7 +159,7 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      messages: messages.map((message) => {
+      messages: messages.map((message: any) => {
         const labelIds = getLabelIds(message.metadata);
 
         const cleanBody = getDisplayBody({
@@ -171,19 +171,21 @@ export async function GET() {
         return {
           id: message.id,
           externalMessageId: message.externalMessageId,
-          threadId: message.threadId,
-          subject: message.subject,
-          snippet: message.snippet,
+          externalThreadId: message.externalThreadId,
+          subject: message.subject || "(No subject)",
+          fromEmail: message.fromEmail,
+          fromName: message.fromName || message.fromEmail,
+          toEmails: message.toEmails || [],
+          ccEmails: message.ccEmails || [],
           bodyText: cleanBody,
           bodyHtml: message.bodyHtml,
-          fromEmail: message.fromEmail,
-          fromName: message.fromName,
-          toEmails: message.toEmails,
-          ccEmails: message.ccEmails,
-          receivedAt: message.receivedAt,
-          isUnread: labelIds.includes("UNREAD"),
+          priority: message.priority,
+          intent: message.intent,
           labelIds,
-          threadSubject: message.thread?.subject || message.subject,
+          receivedAt: message.receivedAt,
+          sentAt: message.sentAt,
+          createdAt: message.createdAt,
+          thread: message.thread,
         };
       }),
     });
@@ -196,7 +198,7 @@ export async function GET() {
         error:
           error instanceof Error ? error.message : "Unknown Gmail load error",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
